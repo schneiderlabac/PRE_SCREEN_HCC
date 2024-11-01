@@ -1,0 +1,40 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(readr)
+library(data.table)
+library(dplyr)
+
+
+df <- fread("C:/Users/janni/Uniklinik RWTH Aachen/CRC-1382-A11 - public/projects/hcc/data/09_09_2024/X_outer_basic_all_raw.csv")
+
+
+
+columns_to_keep <- c("eid",
+  "BMI", "Waist circumference", "Weight", "AGE", "SEX", "Pack years",
+  "Liver cirrhosis", "Arterial hypertension", "DM", "MCV", "Platelet count",
+  "Alanine aminotransferase", "Alkaline phosphatase", "Aspartate aminotransferase",
+  "Glucose")
+
+# Subset the dataframe
+#df_subset <- df[, columns_to_keep]
+df_subset <- df %>% select(all_of(columns_to_keep))
+
+
+
+df_solo <- df_subset[df_subset$eid == "1000092", ] #subset row
+# View the first few rows of the subsetted dataframe
+head(df_solo)
+
+# Check the structure of the subsetted dataframe
+str(df_solo)
+
+
+
+
+```
+

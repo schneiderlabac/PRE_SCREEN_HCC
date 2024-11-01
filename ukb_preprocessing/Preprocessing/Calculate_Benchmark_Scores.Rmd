@@ -1,0 +1,298 @@
+---
+title: "Calculate aMAP Score"
+author: "JC"
+date: "2023-10-17"
+output: html_document
+---
+```{r}
+source("../config.R") #Loads libraries, variables and global function
+```
+
+
+
+# Importing relevant columns
+
+```{r}
+setwd(sharepoint_ukb) #from central storage
+df_withdrawals <- read.delim("raw/withdrawals.txt")
+df_blood <- fread("extracted/UKB_Patients_blood.csv") %>% check_and_remove_withdrawals(df_withdrawals)
+df_afp <- fread("extracted/AFP.csv") %>% check_and_remove_withdrawals(df_withdrawals) %>%          #just for AMAP2
+  select(-V1) %>%                    # Remove the "V1" column
+  rename(AFP = `66`) 
+
+setwd(project_path) #project-specific
+load("data/dataframes/df_covariates.RData")
+df_covariates <- check_and_remove_withdrawals(df_covariates, df_withdrawals)
+load("data/dataframes/df_icd.RData")
+
+
+df_y <- read.csv(paste0(project_path, "/data/dataframes/df_y.csv")) %>% check_and_remove_withdrawals(df_withdrawals) %>%
+      select(c(eid, status, status_cancerreg))
+
+
+df_icd <- df_icd %>%
+  mutate(across(-eid, ~ as.factor(.x))) %>%
+  check_and_remove_withdrawals(df_withdrawals)
+
+
+df_blood <- fread(paste0(sharepoint_ukb, "/extracted/UKB_Patients_blood.csv")) %>% check_and_remove_withdrawals(df_withdrawals)
+Blood_Marker_Index <- read_excel(paste0(sharepoint_ukb, "/", master_table), sheet="Blood count and biochemistry") %>%
+  mutate(datafield = paste0(datafield, '-0.0'))
+
+df_blood <- df_blood %>%
+  rename_with(
+    ~ Blood_Marker_Index$Description[match(., Blood_Marker_Index$datafield)],
+    .cols = -eid  # Exclude 'eid' from renaming
+  )
+
+df_blood <- df_blood %>%
+  select(eid, all_of(Blood_Marker_Index$Description)) %>% # Order Blood columns
+  mutate_at(vars(-1), mean.impute)
+
+```
+
+
+
+# Extract aMAP Score
+Calculate aMAP (Advanced Model for End-Stage Liver Disease Allocation) score.
+
+  The aMAP score is a formula used to assess the severity of liver disease. It takes into account
+    the patient's age, gender, bilirubin level, albumin level, and platelet count to provide a
+    numerical score.
+
+  Parameters:
+  - age (int or float): Age of the patient in years.
+  - gender (int): Gender of the patient (0 for female, 1 for male).
+  - bilirubin (float): Bilirubin level in micromoles per liter (μmol/L).
+  - albumin (float): Albumin level in grams per liter (g/L).
+  - platelet_count (float): Platelet count in thousands per cubic millimeter (10^3/mm³).
+  
+  Formula:
+    aMAP = ((age * 0.06 + gender * 0.89 + 0.48 * ((log10(bilirubin) * 0.66) + (albumin * -0.085)) - 0.01 * platelet_count) + 7.4) / 14.77 * 100
+
+```{r}
+#Access relevant columns and impute NAs
+df_amap <- df_blood %>% 
+  select(c("eid", "Platelet count", "Albumin", "Total bilirubin")) %>%
+  rename(
+    bilirubin = `Total bilirubin`,
+    platelet_count = `Platelet count`,
+    albumin = `Albumin`
+  ) %>%
+  left_join(df_covariates %>% select(c("eid", "AGE", "SEX")), by = "eid") %>% 
+  rename(gender = SEX)
+
+df_amap <- as.data.frame(df_amap)
+df_amap[,2:4] <- mean.impute(df_amap[,2:4])
+df_amap$age <- df_covariates$AGE
+df_amap$gender <- df_covariates$SEX
+
+
+df_amap$gender <- ifelse(df_amap$gender == "Female", 0, 1)
+df_amap$gender <- as.numeric(df_amap$gender)
+
+
+
+#Calculate value
+df_amap$aMAP <- ((df_amap$age * 0.06 + df_amap$gender * 0.89 + 0.48 * ((log10(df_amap$bilirubin) * 0.66) + (df_amap$albumin * -0.085)) - 0.01 * df_amap$platelet_count) + 7.4) / 14.77 * 100
+
+df_amap <- df_amap %>% 
+  select(c("eid", "aMAP", "gender")) %>%
+  mutate(aMAP = aMAP / 100)
+  
+
+summary(df_amap$aMAP)
+
+```
+
+# Subset for PAR predefined in Table X 
+# Export amap dataframes
+```{r}
+
+
+
+
+df_amap <- inner_join(df_amap, df_y, by="eid")
+write.csv(df_amap, file=paste(project_path, "/Models/df_amap.csv", sep=''))
+
+df_amap_par <- inner_join(df_amap, par_eids, by="eid")
+write.csv(df_amap_par, file=paste(project_path, "/Models/df_amap_par.csv", sep=''))
+
+
+```
+
+
+
+# Calculate Fib-4
+In Sterling et al, which studied patients co-infected with HIV and Hepatitis C, a simple, non-invasive index (FIB-4) was developed to identify significant hepatic fibrosis.
+
+The formula for FIB-4 is: Age ([yr] x AST [U/L]) / ((PLT [10(9)/L]) x (ALT [U/L])(1/2)).
+
+The AUROC of the index was 0.765 for differentiation between Ishak stage 0-3 and 4-6. At a cutoff of <1.45 in the validation set, the negative predictive value to exclude advanced fibrosis (stage 4-6) was 90% with a sensitivity of 70%. A cutoff of >3.25 had a positive predictive value of 65% and a specificity of 97%. Using these cutoffs, 87% of the 198 patients with FIB-4 values outside 1.45-3.25 would be correctly classified, and liver biopsy could be avoided in 71% of the validation group.
+
+https://www.qxmd.com/pubmed/16729309 Sterling et al Hepatology 2006
+
+```{r}
+df_fib4 <- df_covariates %>% select("eid", "AGE") %>%
+  left_join(df_blood %>% 
+              select(eid, 
+                     AST = `Aspartate aminotransferase`,
+                     ALT = `Alanine aminotransferase`,
+                     PLT = `Platelet count`),
+            by = "eid")
+
+df_fib4 <- df_fib4 %>%
+  mutate(
+    FIB4_orig = (AGE * AST) / (PLT * (ALT * 0.5))
+  )
+
+# Calculate normalized FIB-4 score (0 to 1)
+df_fib4 <- df_fib4 %>%
+  mutate(
+    FIB4 = (FIB4_orig - min(FIB4_orig, na.rm = TRUE)) / (max(FIB4_orig, na.rm = TRUE) - min(FIB4_orig, na.rm = TRUE))
+  )
+
+sum(is.na(df_fib4$FIB4))
+summary(df_fib4$FIB4)
+```
+
+# Calculate APRI
+(AST to Platelet Ratio Index):
+
+Formula: (AST / ULN_AST) / (PLT / 100)
+
+(Sex-specific ULNs)
+```{r}
+df_apri <- df_covariates %>% 
+  select(eid, SEX) %>%
+  left_join(df_blood %>% 
+              select(eid, 
+                     AST = `Aspartate aminotransferase`,
+                     PLT = `Platelet count`),
+            by = "eid")
+
+df_apri <- df_apri %>%
+  mutate(
+    ULN_AST = case_when(
+      SEX == "Female" ~ 35,
+      SEX == "Male" ~ 50,
+      TRUE ~ NA_real_
+    ),
+    APRI_orig = (AST / ULN_AST) / (PLT / 100)
+  )
+
+# Normalize APRI score (0 to 1)
+df_apri <- df_apri %>%
+  mutate(
+    APRI = (APRI_orig - min(APRI_orig, na.rm = TRUE)) / (max(APRI_orig, na.rm = TRUE) - min(APRI_orig, na.rm = TRUE))
+  )
+
+# Summary of APRI scores
+summary(df_apri)
+```
+
+NFS Score:
+AST, ALT, age, BMI,
+T2DM, platelets,
+albumin
+
+NAFLD fibrosis score = -1.675 + 0.037 × age (year) + 0.094 × BMI (kg/m2) + 1.13 × IFG/diabetes (yes = 1, no = 0) + 0.99 × AST/ALT ratio - 0.013 × platelet count (×109/L) - 0.66 × albumin (g/dL)
+
+Interpretation:
+
+<-1.455: Low probability of advanced fibrosis
+-1.455 to 0.676: Indeterminate score
+0.676: High probability of advanced fibrosis
+
+```{r}
+df_nfs <- df_covariates %>% 
+  select(eid, SEX, BMI, AGE) %>%
+  left_join(df_icd %>% select(eid, DM,)) %>%
+  left_join(df_blood %>% 
+              select(eid, 
+                     AST = `Aspartate aminotransferase`,
+                     ALT = `Alanine aminotransferase`,
+                     PLT = `Platelet count`,
+                    Albumin),
+            by = "eid")
+
+df_nfs <- df_nfs %>%
+  mutate(
+    DM_numeric = as.numeric(DM),
+    AST_ALT_ratio = AST / ALT,
+    NFS_orig = -1.675 + 0.037 * AGE + 0.094 * BMI + 1.13 * ifelse(DM_numeric == 1, 1, 0) + 
+          0.99 * AST_ALT_ratio - 0.013 * PLT - 0.66 * Albumin
+  )
+
+# Normalize NFS score (0 to 1)
+df_nfs <- df_nfs %>%
+  mutate(
+    NFS = (NFS_orig - min(NFS_orig, na.rm = TRUE)) / (max(NFS_orig, na.rm = TRUE) - min(NFS_orig, na.rm = TRUE))
+  )
+
+# Summary of NFS scores
+summary(df_nfs$NFS)
+```
+
+# Merge scores
+```{r}
+df_benchmark <- df_amap %>%
+  select(eid, aMAP, gender) %>%
+  inner_join(df_apri %>% select(eid, APRI), by = "eid") %>%
+  inner_join(df_fib4 %>% select(eid, FIB4), by = "eid") %>%
+  inner_join(df_nfs %>% select(eid, NFS), by = "eid") %>%
+  inner_join(df_icd %>% select(eid, `Liver cirrhosis`), by = "eid")
+
+df_benchmark <- merge(df_benchmark, df_y, by="eid")
+
+# Summary of the benchmark dataframe
+summary(df_benchmark)
+
+# Correlation matrix of the normalized scores
+cor_matrix <- cor(df_benchmark[, -1], use = "complete.obs")
+print(cor_matrix)
+```
+
+
+
+
+
+
+
+
+
+
+# Subset for liver cirrhosis/NAFLD
+```{r}
+# subset= "Other and unspecified cirrhosis of liver"
+# df_merged <- merge(df_amap, df_icd[, c("eid", "Other and unspecified cirrhosis of liver")], by="eid", all.x = TRUE)
+# df_amap_cirrhosis <- df_merged[df_merged$'Other and unspecified cirrhosis of liver' == 1, ]
+# df_amap <- merge(df_amap, df_y, by="eid")
+# 
+# df_merged <- merge(df_amap, df_icd[, c("eid", "NAFLD")], by="eid", all.x = TRUE)
+# df_amap_nafld <- df_merged[df_merged$'NAFLD' == 1, ]
+# df_amap <- merge(df_amap, df_y, by="eid")
+#   
+# write.csv(df_amap_cirrhosis, file=paste(project_path, "/data/dataframes/df_amap_cirrhosis.csv", sep=''))
+# write.csv(df_amap_nafld, file=paste(project_path, "/data/dataframes/df_amap_nafld.csv", sep=''))
+
+```
+
+
+
+Export
+```{r}
+write.csv(df_amap, file=paste(project_path, "/data/dataframes/df_amap.csv", sep=''))
+
+write.csv(df_benchmark, file=paste(project_path, "/data/dataframes/df_benchmark.csv", sep=''))
+
+
+
+par_eids <- read.csv(file.path(project_path, "data/07_05_2024/par_eids.csv")) %>%
+  rename("eid" = "x")
+df_amap_par <- inner_join(df_amap, par_eids, by="eid")
+write.csv(df_amap_par, file=paste(project_path, "/data/dataframes/df_amap_par.csv", sep=''))
+
+
+```
+

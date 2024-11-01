@@ -1,0 +1,63 @@
+{
+  "_comment": "This is a configuration file for project-specific settings. Each key represents a unique user ID with corresponding configurations. Note: JSON syntax requires double quotes for strings and does not support single quotes or comments (// or #) like other programming languages. Arrays are denoted with square brackets [], and objects (key-value pairs) with curly braces {}.",
+  "hcc": {
+    "IOI": "C220",
+    "IOIs": [
+      "C220"
+    ],
+    "DOI": "HCC",
+    "icd_dict": "Master_Table_JC.xlsx",
+    "risk_constellation": "cld",
+    "par_subset": [
+      "CLD",
+      "Cirrhosis",
+      "Viral Hepatitis",
+      "Blood_Parameters"
+    ],
+    "diag_codes": [
+      "Hepatobiliary cancer"
+    ],
+    "par_icd_codes": [
+      "K700",
+      "K701",
+      "K702",
+      "K703",
+      "K704",
+      "K709",
+      "K740",
+      "K741",
+      "K742",
+      "K743",
+      "K744",
+      "K745",
+      "K746",
+      "K752",
+      "K753",
+      "K754",
+      "K758",
+      "K759",
+      "K760",
+      "K767",
+      "R17",
+      "I850",
+      "I859",
+      "R18",
+      "B181",
+      "B182",
+      "R160",
+      "R161",
+      "R162"
+    ],
+    "timeframe": [
+      "5"
+    ],
+    "reduce_model": [
+      "TRUE"
+    ],
+    "remove_columns": [
+      "Handgripstrength",
+      "Mean sphered cell volume",
+      "rs9272105_A"
+    ]
+  },
+}

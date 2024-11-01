@@ -1,0 +1,93 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-08-16"
+---
+# Libraries
+```{r}
+source("../config.R") #Loads libraries, variables and global function
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+```
+
+#load dfs
+```{r}
+df_all <- read_csv(paste0(project_path, "/data/09_09_2024/X_inner_basic_all_raw.csv"))
+df_summary_aou <- read_excel("C:/Users/janni/OneDrive/Dokumente/PostDoc/All Of Us/summary_data/df_summary_aou.xlsx")
+df_meta_ukb <- read_excel(paste0(sharepoint_ukb, "/meta/Methods_UKB.xlsx"), sheet="hematology_short") %>%
+  rename(Unit_ukb = Unit)
+df_meta_aou <- read_excel(paste0(sharepoint_ukb, "/meta/Blood_Metadata_AOU.xlsx"), sheet="serum") %>%
+  rename(Unit_aou = 'SI Unit')
+
+df_columngroups <- read_csv(paste0(project_path, "/data/27_05_2024/columngroups.csv"))
+
+```
+
+
+```{r}
+summarize_continuous_columns <- function(df, columns_to_drop = c(), digits = 4) {
+  # Remove specified columns
+  df <- df %>% select(-any_of(columns_to_drop))
+  
+  # Select only numeric columns
+  numeric_columns <- df %>% select_if(is.numeric) %>% names()
+  
+  # Calculate summary statistics for numeric columns
+  summary_df <- df %>%
+    select(all_of(numeric_columns)) %>%
+    summarise(across(everything(), list(
+      mean = ~mean(., na.rm = TRUE),
+      median = ~median(., na.rm = TRUE),
+      max = ~max(., na.rm = TRUE),
+      min = ~min(., na.rm = TRUE)
+    )))
+  
+  # Reshape the dataframe
+  summary_df <- summary_df %>%
+    pivot_longer(cols = everything(),
+                 names_to = c("column", ".value"),
+                 names_pattern = "(.*)_(mean|median|max|min)")
+  
+  # Reorder columns
+  summary_df <- summary_df %>%
+    select(column, mean, median, max, min)
+  
+  # Format numbers to avoid scientific notation
+  summary_df <- summary_df %>%
+    mutate(across(c(mean, median, max, min), 
+                  ~format(round(., digits), nsmall = digits, scientific = FALSE)))
+  
+  return(summary_df)
+}
+
+# Set options to display full numbers in console output
+options(scipen = 999)
+```
+
+```{r}
+df_summary_ukb <- summarize_continuous_columns(df_all)
+
+df_summary <- df_summary_ukb %>%
+  inner_join(df_summary_aou, by = "column", suffix = c("_ukb", "_aou"))
+
+# Reorder columns to group UKB and AOU statistics together
+df_summary <- df_summary %>%
+  select(column, sort(setdiff(names(.), "column"))) %>%
+  merge(df_meta_ukb, by.x= "column", by.y= "Column Name", all.x=TRUE) %>%
+  merge(df_meta_aou, by.x= "column", by.y= "Column Name", all.x=TRUE) %>%
+  merge(df_columngroups, by.x= "column", by.y = "column_name", all.x=TRUE)
+
+df_summary_ukb <- df_summary_ukb %>%
+  select(column, sort(setdiff(names(.), "column"))) %>%
+  merge(df_meta_ukb, by.x= "column", by.y= "Column Name", all.x=TRUE) %>%
+  merge(df_columngroups, by.x= "column", by.y = "column_name", all.x=TRUE)
+
+
+write_xlsx(df_summary, paste0(project_path, "/tables/Adjust_AOU_UKB_MinMax.xlsx")) #Update the "manual" table with this result
+write_xlsx(df_summary_ukb, paste0(project_path, "/tables/UKB_MinMax.xlsx")) #Update the "manual" table with this result
+
+
+```
+

@@ -1,0 +1,224 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+source("../config.R") #Loads libraries, variables and global function
+
+```
+
+```{r}
+library(viridis)
+df_ethnicity <- read.xlsx(paste0(home, "/All Of Us/summary_data/Ethnicity_counts.xlsx"), sheet = "all")
+```
+
+
+```{r}
+df_ethnicity <- df_ethnicity %>%
+  mutate(Count.Var1 = case_when(
+    Count.Var1 %in% c("I prefer not to answer", "None Indicated", "None of these", "PMI: Skip") ~ "No Answer",
+    Count.Var1 == "Native Hawaiian or Other Pacific Islander" ~ "Pacific Islander",
+    TRUE ~ Count.Var1)) %>%
+  group_by(Count.Var1) %>%
+  summarise(Count.Freq = sum(Count.Freq)) %>%
+  arrange(desc(Count.Freq))
+
+# Calculate the total number
+total_N <- sum(df_ethnicity$Count.Freq)
+
+df_ethnicity <- df_ethnicity %>%
+  mutate(Proportion = Count.Freq / total_N * 100)
+
+# Create the donut plot
+ggplot(df_ethnicity, aes(x = 2, y = Count.Freq, fill = Count.Var1)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  scale_fill_viridis(discrete = TRUE) +
+  xlim(0.5, 2.5) +
+  geom_text(aes(label = ifelse(Proportion >= 5, Count.Var1, "")), 
+            position = position_stack(vjust = 0.5)) +
+  geom_text(aes(x = 2.5, y = Count.Freq / 2 + c(0, cumsum(Count.Freq)[-length(Count.Freq)]),
+                label = ifelse(Proportion < 5, Count.Var1, "")),
+            hjust = 0, size = 3) +
+  geom_segment(aes(x = 2.3, xend = 2.5, 
+                   y = Count.Freq / 2 + c(0, cumsum(Count.Freq)[-length(Count.Freq)]),
+                   yend = Count.Freq / 2 + c(0, cumsum(Count.Freq)[-length(Count.Freq)])),
+               linetype = "dotted") +
+  annotate("text", x = 0, y = 0, label = paste("N =", total_N), size = 6, fontface = "bold", hjust = 0.5, vjust = 0.5) +
+  theme(legend.position = "right") +
+  guides(fill = guide_legend(override.aes = list(label = paste(df_ethnicity$Count.Var1, "(", df_ethnicity$Count.Freq, ")")))) +
+  labs(title = "Ethnicity Distribution")
+```
+```{r}
+
+df_ethnicity <- df_ethnicity %>%
+    mutate(Percentage = Count.Freq / total_N * 100) %>%
+    arrange(desc(Percentage)) %>%
+    mutate(
+      cumulative = cumsum(Percentage) - 0.5 * Percentage,
+      ymax = cumsum(Percentage),
+      ymin = c(0, head(ymax, n=-1))
+    )
+
+
+
+create_ethnicity_donut <- function(df_ethnicity, font_size = 6, show_percentages = TRUE) {
+  gap <- 6  # Increased gap for more visible white space
+  df_ethnicity <- df_ethnicity %>%
+    mutate(
+      ymax = ymax + gap * seq_along(ymax),
+      ymin = c(0, head(ymax, n=-1))
+    )
+  
+  # Calculate total_N and percentages
+  total_N <- sum(df_ethnicity$Count.Freq)
+  # Create base plot
+  p <- ggplot(df_ethnicity, aes(ymax = ymax, ymin = ymin, xmax = 2, xmin = 1, fill = Count.Var1)) +
+    geom_rect() +
+    coord_polar(theta = "y") +
+    theme_void() +
+    scale_fill_viridis_d() +
+    xlim(0, 2.5)
+
+  # Function to calculate label positions
+  label_position <- function(angle) {
+    angle <- angle %% 360
+    if (angle > 90 && angle < 270) {
+      hjust <- 1
+      x <- 2.3
+    } else {
+      hjust <- 0
+      x <- 2.1
+    }
+    list(x = x, hjust = hjust)
+  }
+
+  # Add labels
+  label_data <- df_ethnicity %>%
+    mutate(angle = 90 - 360 * (ymin + ymax) / 2 / 100)
+
+  label_positions <- lapply(label_data$angle, label_position)
+  label_data$x <- sapply(label_positions, function(x) x$x)
+  label_data$hjust <- sapply(label_positions, function(x) x$hjust)
+
+  p <- p + geom_text(data = label_data,
+                     aes(x = x, y = (ymin + ymax) / 2, label = paste0(Count.Var1, 
+                         ifelse(show_percentages, paste0(" \n(", round(Percentage, 1), "%)"), ""))),
+                     hjust = label_data$hjust, size = font_size)
+
+  # Add connecting lines for labels
+  p <- p + geom_segment(data = label_data,
+                        aes(x = 2, xend = x,
+                            y = (ymin + ymax) / 2, yend = (ymin + ymax) / 2),
+                        linetype = "solid")
+
+  # Add total N in the center
+  p <- p + annotate("text", x = 0, y = 0, 
+                    label = paste("Total\nN =", format(total_N, big.mark = ",")), 
+                    size = font_size, fontface = "bold", hjust = 0.5, vjust = 0.5)
+
+  # Remove legend and add title
+  p <- p + theme(legend.position = "right") +
+    labs(title = "")
+
+  return(p)
+}
+
+plot <- create_ethnicity_donut(df_ethnicity, font_size = 5, show_percentages = TRUE)
+print(plot)
+
+``
+
+```
+
+```{r}
+library(ggplot2)
+library(viridis)
+library(dplyr)
+
+# Assuming df_ethnicity is already defined as before
+
+# Calculate the cumulative percentages and ranges
+df_ethnicity <- df_ethnicity %>%
+  mutate(Percentage = Count.Freq / sum(Count.Freq) * 100) %>%
+  arrange(desc(Percentage)) %>%
+  mutate(
+    cumulative = cumsum(Percentage) - 0.5 * Percentage,
+    ymax = cumsum(Percentage),
+    ymin = c(0, head(ymax, n = -1))
+  )
+
+# Function to create the donut plot
+create_ethnicity_donut <- function(df_ethnicity, font_size = 6, show_percentages = TRUE) {
+  gap <- 0  # Gap between segments
+  
+  # Adjust ymin and ymax with gaps
+  df_ethnicity <- df_ethnicity %>%
+    mutate(
+      ymax = ymax + gap * seq_along(ymax),
+      ymin = c(0, head(ymax, n = -1))
+    )
+  
+  total_N <- sum(df_ethnicity$Count.Freq)
+  
+  p <- ggplot(df_ethnicity, aes(ymax = ymax, ymin = ymin, xmax = 2, xmin = 1, fill = Count.Var1)) +
+    geom_rect() +
+    coord_polar(theta = "y") +
+    theme_void() +
+    scale_fill_viridis_d() +
+    xlim(0, 2.5)
+  
+  # Calculate the label positions
+  label_position <- function(angle) {
+    angle <- angle %% 360
+    if (angle > 90 && angle < 270) {
+      hjust <- 1
+      x <- 2.3
+    } else {
+      hjust <- 0
+      x <- 2.1
+    }
+    list(x = x, hjust = hjust)
+  }
+  
+  label_data <- df_ethnicity %>%
+    mutate(angle = 90 - 360 * (ymin + ymax) / 2 / 100)
+
+  label_positions <- lapply(label_data$angle, label_position)
+  label_data$x <- sapply(label_positions, function(x) x$x)
+  label_data$hjust <- sapply(label_positions, function(x) x$hjust)
+  
+  # Add labels with percentages
+  p <- p + geom_text(data = label_data,
+                     aes(x = x, y = (ymin + ymax) / 2, 
+                         label = paste0(Count.Var1, ifelse(show_percentages, 
+                         paste0(" \n(", round(Percentage, 1), "%)"), ""))),
+                     hjust = label_data$hjust, size = font_size)
+  
+  # Add connecting lines for labels
+  p <- p + geom_segment(data = label_data,
+                        aes(x = 2, xend = x,
+                            y = (ymin + ymax) / 2, yend = (ymin + ymax) / 2),
+                        linetype = "solid")
+  
+  # Add total N in the center
+  p <- p + annotate("text", x = 0, y = 0, 
+                    label = paste("Total\nN =", format(total_N, big.mark = ",")), 
+                    size = font_size + 1, fontface = "bold", hjust = 0.5, vjust = 0.5)
+  
+  # Remove legend and add title
+  p <- p + theme(legend.position = "right") +
+    labs(title = "Ethnicity Distribution")
+  
+  return(p)
+}
+
+# Create and print the plot
+plot <- create_ethnicity_donut(df_ethnicity, font_size = 5, show_percentages = TRUE)
+print(plot)
+
+```
+
+

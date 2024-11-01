@@ -1,0 +1,125 @@
+---
+title: "Table 1 Creation"
+output: html_notebook
+date: "2024-04-11"
+---
+
+```{r}
+
+source("../config.R") #Loads libraries, variables and global function
+```
+# Table Export Preparation
+
+Prepare and modify the df_x_all_raw df to be more visually appealing
+when creating the table 1 for the paper
+
+```{r}
+setwd(project_path)
+load("data/dataframes/df_y.RData") 
+df_y <- df_y %>% select(c("eid", "status"))
+
+covariates_list <- df_columngroups[df_columngroups$source_df == "df_covariates", "column_name"]
+icd_list <- df_columngroups[df_columngroups$source_df == "df_diagnosis", "column_name"]
+metabolomics_list <- df_columngroups[df_columngroups$source_df == "df_metabolomics", "column_name"]
+blood_list <- df_columngroups[df_columngroups$source_df == "df_blood", "column_name"]
+snp_list <- df_columngroups[df_columngroups$source_df == "df_snp", "column_name"]
+
+label_list <- list(
+  location_name = "Location",
+  location_country = "Country",
+  Family_diabetes = "Family Diabetes",
+  Alk_g_d = "Alcohol (gram per day)",
+  High_Alk = "High Alcohol Consumption",
+  Path_Alk = "Pathological Alcohol Consumption",
+  BMI_cat = "BMI Categories",
+  Bloodpressure = "Bloodpressure sys. [mmHg]",
+  Weight = "Weight [kg]"
+)
+
+table1_order <- c(
+  "AGE", "SEX", "BMI", "BMI_cat", "Waist circumference", 
+  "Weight", "Standing height", "Handgripstrength", 
+  "MultipleDeprivationIndex", "Bloodpressure", "Medication", 
+  "Family_diabetes", "Smoking status", "Ever smoked", "Pack years" # Continue as necessary
+)
+
+
+
+
+```
+
+# Table Creation All
+
+```{r}
+head_only <- FALSE
+# Change "all" to "par" if you want to create tables of just the "patient at risk" subset
+df_all <- df_x_all_raw %>% inner_join(df_y, by = "eid")
+df_all$status <- ifelse(df_all$status == 0, paste("No ", DOI), 
+                                  ifelse(df_all$status == 1, DOI, df_all$status))
+
+df_tbl_1 <- df_all %>%
+  select(!any_of(c(blood_list, metabolomics_list, icd_list, "eid", "Date of assessment", "UKB assessment centre", snp_list)))
+
+create_table(df_tbl_1, "Table 1", export_RDS=TRUE, head_only=head_only, remove_SEX=FALSE,  enforced_order=table1_order)
+```
+
+# Table Creation PAR
+```{r}
+head_only <- FALSE
+df_all <- df_x_par_raw %>% inner_join(df_y, by = "eid")
+df_all$status <- ifelse(df_all$status == 0, paste("No", DOI), 
+                                  ifelse(df_all$status == 1, DOI, df_all$status))
+
+df_tbl_1 <- df_all %>%
+  select(!any_of(c(blood_list, metabolomics_list, icd_list, "eid", "Date of assessment", "UKB assessment centre", snp_list)))
+
+create_table(df_tbl_1, "Table 1", export_RDS=TRUE, head_only=head_only, remove_SEX=FALSE,  enforced_order=table1_order)
+```
+
+# Tables ICD/Blood
+```{r}
+df_tbl_icd <- df_all %>%
+  select(any_of(c("status", "SEX", icd_list)))
+
+df_tbl_blood <- df_all %>%
+  select(any_of(c("status", "SEX", blood_list)))
+
+df_tbl_metabolomics <- df_all %>%
+  select(any_of(c("status", "SEX", metabolomics_list)))
+
+df_tbl_snp <- df_all %>%
+  select(any_of(c("status", "SEX", snp_list)))
+
+
+head_only <- FALSE
+
+create_table(df_tbl_blood, "Table Blood", export_RDS=TRUE, head_only=head_only)
+
+create_table(df_tbl_icd, "Table ICD", export_RDS=TRUE, head_only=head_only)
+
+create_table(df_tbl_metabolomics, "Table Metabolomics", export_RDS=TRUE, head_only=head_only)
+
+create_table(df_tbl_snp, "Table SNP", export_RDS=TRUE, head_only=head_only)
+
+
+
+```
+
+
+
+# Male/Female stratified table
+```{r}
+head_only <- FALSE
+# Change "all" to "par" if you want to create tables of just the "patient at risk subset
+df_all <- df_x_all_raw %>% inner_join(df_y, by = "eid")
+df_all$status <- ifelse(df_all$status == 0, paste("No ", DOI), 
+                                  ifelse(df_all$status == 1, DOI, df_all$status))
+
+df_tbl_1 <- df_all %>%
+  select(!any_of(c(blood_list, metabolomics_list, icd_list, "eid", "Date of assessment", "UKB assessment centre", snp_list)))
+
+
+split_create_merge_tables(df_tbl_1, feature="SEX", table_name_prefix="SEX", enforced_order=table1_order, remove_SEX=FALSE, export_RDS=TRUE)
+
+Table_1_stratified <- import_merge_tables(table_name= "Table_1", feature="SEX", levels = c("Female", "Male"))
+```

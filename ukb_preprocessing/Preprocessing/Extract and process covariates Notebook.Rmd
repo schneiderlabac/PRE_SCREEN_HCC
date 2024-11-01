@@ -1,0 +1,516 @@
+---
+title: "Extract and process covariates"
+output: html_notebook
+---
+
+```{r}
+source("../config.R") #Loads libraries, variables and global function
+```
+
+#Import raw covariates data A. Optional: Extract covariates directly from ukb52200 (takes very long) B (recommended). Extract from "Extracted" folder
+
+```{r}
+#prepare vector for reading out correct covariate columns (once done and added to fread function in import section, this has no longer to be run until new covariates come in)
+#covariate_string <- cat(covariate_index$datafield2, sep="", file="covariate_index.txt") #erstellt .txt datei im Working directory. Diese kann kopiert werden und in die fread-Funktion nach der eid eingefügt werden
+
+# A Extract covariates of interest
+ #setwd(sharepoint_ukb)
+#covariates<- fread("raw/ukb52200.csv", select=c("eid", '21000-0.0','21001-0.0','48-0.0','21002-0.0','50-0.0','53-0.0', '54-0.0', '21003-0.0','31-0.0','20116-0.0','20160-0.0','20161-0.0','20117-0.0','1558-0.0','3731-0.0','4407-0.0','4418-0.0','4429-0.0','4440-0.0','4451-0.0','4462-0.0','1568-0.0','1578-0.0','1588-0.0','1598-0.0','1608-0.0','5364-0.0','1618-0.0','1628-0.0','2664-0.0','10818-0.0','3859-0.0','10853-0.0','4080-0.0','4080-0.1','6153-0.0','6177-0.0','90087-0.0','20107-0.0','20110-0.0','20111-0.0','2443-0.0','26410-0.0','26427-0.0','26426-0.0','22009-0.1','22009-0.2','22009-0.3','22009-0.4','22009-0.5', "93-0.0"))
+#write.csv(covariates, file="extracted/covariates.csv", row.names=FALSE)
+
+
+# B. Load from "extracted" folder
+setwd(sharepoint_ukb) 
+df_withdrawals <- read.delim("raw/withdrawals.txt")
+covariates <- fread("extracted/covariates.csv")  
+covariates <-as.data.frame(covariates) %>% check_and_remove_withdrawals(df_withdrawals)
+covariates <- covariates[!duplicated(covariates$eid), ]
+
+    
+# to add aditional covariate (please also add metadata to master table!)
+#setwd(sharepoint_ukb)
+#additional<- fread("raw/ukb52200.csv", select=c("46-0.0", "47-0.0", ...)) #extract new columns
+# covariates <- cbind(covariates, additional) #add them to covariates
+# setwd(sharepoint_ukb) 
+# write.csv(covariates, file="extracted/covariates.csv", row.names=FALSE) #export the new (raw) covariates file w/o preprocessing
+
+
+covariate_index <- read_excel(master_table, sheet = "All covariates")   # import index data (Liste mit allen covariates, codes, units etc)
+covariate_final <- read_excel(master_table, sheet = "Final covariates") # final list should look like this
+
+df_covariates <- covariates 
+df_covariates <-  setnames(covariates, old = covariate_index$datafield1, new = covariate_index$Assessment, skip_absent=TRUE) #rename variables after index df
+df_covariates <- as.data.frame(df_covariates) %>% check_and_remove_withdrawals(df_withdrawals)
+ 
+#Count missing values and export available data to covariate_index_table (export in separate table, then copy/paste n/missing to excel_file "covariate_index" 
+#(if exported directly, formatting is ruined)
+#covariate_index$missing <- colSums(is.na(df_covariates[,2:49]))
+#covariate_index$n <- nrow(df_covariates) - colSums(is.na(df_covariates[,2:49]))
+#write.xlsx(covariate_index, file="C:/Users/Jan/OneDrive/Dokumente/PostDoc/Patient_tables/covariate_numbers.xlsx", colNames=TRUE, rowNames=FALSE, append=FALSE) #not necessary every time
+
+```
+
+
+
+# Prepare subsetting vectors
+
+```{r}
+# Subset the dataframe for rows where the predictor is "Alcohol" etc and create vectors for respective columns in df_covariates
+covariate_index_alcohol <- subset(covariate_index, Predictor == "Alcohol") #subset of index table
+vec_alcohol <- covariate_index_alcohol[["Assessment"]] 
+covariate_index_smoking_status <- subset(covariate_index, Predictor == "Smoking status")
+vec_smoking <- covariate_index_smoking_status[["Assessment"]]
+```
+
+# Preprocess variables
+
+#### 0a. Assessment time
+
+```{r}
+print(paste("NAs in 'Date of attending' Spalte: ", sum(is.na(df_covariates$`Date of assessment`))))
+
+print(paste("Out of range from 2006-today: ", sum(df_covariates$`Date of assessment` < as.Date("2006-01-01") | 
+    df_covariates$`Date of assessment` > Sys.Date())))
+
+print(paste("Inconsistent format: ", sum(as.character(df_covariates$`Date of assessment`, format = "%Y-%m-%d") != df_covariates$`Date of assessment`)))
+
+
+# Define the min and max dates for the bins
+min_date <- as.Date("2006-01-01")
+max_date <- as.Date("2010-12-31")
+breaks <- seq(min_date, max_date, by = "quarter")
+
+# Create the histogram
+plot <- ggplot(df_covariates, aes(x = as.Date(`Date of assessment`, format = "%Y-%m-%d"))) +
+  geom_histogram(breaks = breaks, color = "black", fill = "grey") +
+  scale_x_date(breaks = "quarter", labels = date_format("%Y-%m")) +
+  xlim(min_date, max_date) +
+  xlab("Date of assessment") +
+  ylab("Count") +
+  theme_minimal()
+```
+
+#### 0b Assessment centre
+
+```{r}
+# Mapping of location codes to city names
+location_mapping <- data.frame(
+  location_code = c(11012, 11021, 11011, 11008, 11003, 11024, 11020, 11005, 11004, 11018, 11010, 11016, 11001, 11017, 11009, 11013, 11002, 11007, 11014, 10003, 11006, 11022, 11023, 11025, 11026, 11027, 11028),
+  location_name = c("London", "Birmingham", "Bristol", "Bury", "Cardiff", "Cheadle", "Croydon", "Edinburgh", "Glasgow", "Hounslow", "Leeds", "Liverpool", "Manchester", "Middlesbrough", "Newcastle", "Nottingham", "Oxford", "Reading", "Sheffield", "Stockport", "Stoke-on-Trent", "Swansea", "Wrexham", "Cheadle", "Reading", "Newcastle", "Bristol"))
+
+
+df_covariates$`UKB assessment centre` <- as.factor(df_covariates$`UKB assessment centre`)
+colSums(is.na(df_covariates))
+summary(df_covariates$`UKB assessment centre`)
+```
+
+#### 1. Ethnicity
+
+```{r}
+#1=white, 2=Mixed, 3=Asian or Asian british, 4=black or black british, 5=chinese, 6=other, -1=do not know, -3 prefer not to answer
+#df_covariates$Ethnicity_sub <- df_covariates$Ethnicity
+
+df_covariates$Ethnicity[df_covariates$Ethnicity == "-3"] <- 0
+df_covariates$Ethnicity[df_covariates$Ethnicity == "-1"] <- 0
+df_covariates$Ethnicity[is.na(df_covariates$Ethnicity)] <- 0
+df_covariates$Ethnicity[df_covariates$Ethnicity > 1000 & df_covariates$Ethnicity < 2000] <- 1
+df_covariates$Ethnicity[df_covariates$Ethnicity > 2000 & df_covariates$Ethnicity < 3000] <- 2
+df_covariates$Ethnicity[df_covariates$Ethnicity > 3000 & df_covariates$Ethnicity < 4000] <- 3
+df_covariates$Ethnicity[df_covariates$Ethnicity > 4000 & df_covariates$Ethnicity < 5000] <- 4
+
+df_covariates$Ethnicity <- factor(df_covariates$Ethnicity, levels = c(0, 1, 2, 3, 4, 5, 6), labels = c("Unknown", "Caucasian", "Mixed", "Asian or Asian british", "Black or Black british", "Chinese", "Other"))
+
+ethnic <- summary(df_covariates$Ethnicity)
+ethnic_rel <- ethnic  / 502411 * 100
+
+print("Amount of different ethnicities in dataset:")
+print(ethnic)
+
+print("Amount of relative shares of ethnicities in dataset:")
+ethnic_rel
+
+
+
+```
+
+#### 2. BMI and other physical measures
+
+```{r}
+### Impute by calculation
+bmi_NA <- sum(is.na(df_covariates$BMI))
+print(paste("Number of NA values in BMI before imputation:", bmi_NA))
+
+df_covariates$BMI[is.na(df_covariates$`BMI`) & !is.na(df_covariates$Weight) & !is.na(df_covariates$`Standing height`)] <- df_covariates$Weight / (df_covariates$`Standing height`/100)^2
+bmi_NA <- sum(is.na(df_covariates$BMI))
+print(paste("Number of NA values in BMI after manual calculation:", bmi_NA))
+
+
+### Impute by waist circumference in categories
+df_covariates$BMI_cat <- cut(df_covariates$BMI,
+                        breaks = c(0, 18.5, 24.9, 29.9, 200),
+                        labels = c("Underweight", "Normal weight", "Overweight", "Obese"))
+
+bmi_NA <- sum(is.na(df_covariates$BMI) & !is.na(df_covariates$Waist_circumference))
+print(paste("Number of NA values that could be imputed by estimation from Waist circumference:", bmi_NA))
+
+#Label as obese or normal according to WHO definition
+df_covariates$BMI_cat[is.na(df_covariates$BMI_cat) & (df_covariates$`Waist_circumference` >= 80) & (df_covariates$SEX == 0)] <- "Obese"
+df_covariates$BMI_cat[is.na(df_covariates$BMI_cat) & (df_covariates$`Waist_circumference` < 80) & (df_covariates$SEX == 0)] <- "Normal weight"
+df_covariates$BMI_cat[is.na(df_covariates$BMI_cat) & (df_covariates$`Waist_circumference` >= 94) & (df_covariates$SEX == 1)] <- "Obese"
+df_covariates$BMI_cat[is.na(df_covariates$BMI_cat) & (df_covariates$`Waist_circumference` < 94) & (df_covariates$SEX == 1)] <- "Normal weight"
+
+# #Calculate mean for Group "Normal weight" and "Obese" according to waist circumference and Sex
+normal_men <- mean(df_covariates$BMI[df_covariates$BMI_cat == "Normal weight" & df_covariates$SEX==1], na.rm=TRUE)
+normal_women <- mean(df_covariates$BMI[df_covariates$BMI_cat == "Normal weight" & df_covariates$SEX==0], na.rm=TRUE)
+obese_men <- mean(df_covariates$BMI[df_covariates$BMI_cat == "Obese" & df_covariates$SEX==1], na.rm=TRUE)
+obese_women <- mean(df_covariates$BMI[df_covariates$BMI_cat == "Obese" & df_covariates$SEX==1], na.rm=TRUE)
+
+
+#Store mean of groups normal/obese for men/women (Not great but better than just mean imputing)
+df_covariates$BMI[is.na(df_covariates$BMI) & !is.na(df_covariates$`Waist circumference`) & df_covariates$SEX== 1] <- ifelse(df_covariates$BMI_cat == "Normal weight", normal_men, obese_men) 
+df_covariates$BMI[is.na(df_covariates$BMI) & !is.na(df_covariates$`Waist circumference`) & df_covariates$SEX== 0] <- ifelse(df_covariates$BMI_cat == "Normal weight", normal_women, obese_women) 
+
+bmi_NA <- sum(is.na(df_covariates$BMI))
+print(paste("Number of NA values after imputation from Waist circumference:", bmi_NA))
+
+#df_covariates <- df_covariates[complete.cases(df_covariates[c("BMI", "Waist circumference", "Weight", "Standing height")]), ]
+
+
+### For the future: Predict waist circumference https://bmcmedresmethodol.biomedcentral.com/articles/10.1186/1471-2288-12-115#citeas
+
+#Handgripstrength
+ df_covariates$Handgripstrength <- rowMeans(df_covariates[, c("Hand grip strength (left)", "Hand grip strength (right)")], na.rm = TRUE)
+  df_covariates$Handgripstrength[is.na(df_covariates$Handgripstrength)] <- NA
+df_covariates["Hand grip strength (left)"] <- mean.impute(df_covariates$`Hand grip strength (left)`)
+df_covariates["Hand grip strength (right)"] <- mean.impute(df_covariates$`Hand grip strength (right)`)
+hgs_NA <- sum(is.na(c(df_covariates$`Hand grip strength (right)`, df_covariates$`Hand grip strength (left)`)))
+print(paste("Number of NA values after imputation from Hand Grip Strenght:", hgs_NA))
+
+
+#sanity(df_covariates[c("BMI", "Waist circumference", "Weight", "Standing height")])
+
+
+
+```
+
+#### 3. AGE/SEX
+
+```{r}
+
+df_covariates$AGE <- as.numeric(df_covariates$AGE)
+
+df_covariates$AGE_cat <- cut(df_covariates$AGE,
+                        breaks = c(0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 150),
+                        labels = c("0-10", "10-20", "20-30", "30-40", "40-50", "50-60", "60-70", "70-80", "80-90", ">90"))
+# 
+df_covariates$SEX <- factor(df_covariates$SEX, levels = c(0, 1), labels = c("Female", "Male"))
+#df_covariates$AGE <- as.numeric(df_covariates$AGE)
+
+
+#sanity(df_covariates[,7:8])
+
+levels(df_covariates$SEX)
+```
+
+#### 4. Smoking
+
+```{r}
+#df_covariates[c("Smoking status", "Ever smoked", "Pack years")] <- covariates[c("Smoking status", "Ever smoked", "Pack years")]
+
+#Set as factors
+df_covariates[["Ever smoked"]] <- factor(df_covariates[["Ever smoked"]])
+df_covariates[["Smoking status"]] <- factor(df_covariates[["Smoking status"]])
+
+df_covariates <- as.data.frame(df_covariates)
+
+#Impute ever smoked
+df_covariates$`Ever smoked`[is.na(df_covariates$`Ever smoked`) & df_covariates$`Pack years` > 0] <- 1
+
+#Pack years = 0 imputed from Smoking status=never or Ever smoked=No
+df_covariates$`Pack years`[df_covariates$`Ever smoked` == 0 | df_covariates$`Smoking status` == 0] <- 0 
+#sanity(df_covariates[c("Smoking status", "Ever smoked", "Pack years")])
+
+#Impute smoking status=Previous from "ever smoked" or pack years"
+df_covariates$`Smoking status`[df_covariates$`Smoking status` == -3 & (df_covariates$`Ever smoked` == 1) | (df_covariates$`Pack years` > 0)] <- 1
+
+#set factors with labels/levels
+#df_covariates["Ever smoked"] <- factor(df_covariates$`Ever smoked`, levels=c(0, 1), labels = c("No", "Yes"))
+df_covariates["Smoking status"] <- factor(df_covariates$`Smoking status`, levels=c(0, 1, 2), labels = c("Never", "Previous", "Current"))
+
+sanity(df_covariates[c("Smoking status", "Ever smoked", "Pack years")])
+
+
+
+#Pack years = 0 imputed from Smoking status=never or Ever smoked=No
+df_covariates$`Pack years`[df_covariates$`Ever smoked` == 0 | df_covariates$`Smoking status` == "Never"] <- 0
+
+#all others have smoking = yes and will get the mean Pack years
+df_covariates <- adjust_outliers(df_covariates, "Pack years")
+df_covariates["Pack years"] <- mean.impute(df_covariates$`Pack years`)
+
+
+
+
+#sanity(df_covariates[c("Smoking status", "Ever smoked", "Pack years")])
+
+sum(is.na(df_covariates$`Pack years`))
+
+
+
+```
+
+#### 5. Alcohol
+
+```{r}
+######## Calculate alcohol g/d ############
+#df_covariates <- covariates          
+# Create a df for alcohol related columns
+          #Replace -3 and -1 with NA in the columns of choice of df_covariates (e.g. in vectors created above) 
+          #-1 represents "Do not know", -3 represents "prefer not to answer")
+          df_covariates_alcohol <- subset (df_covariates, select = vec_alcohol) %>%
+            mutate_all(funs(ifelse(. == -3 | . == -1, NA, .)))
+
+          #Zuerst berechne ich für wöchentlichen Konsum g/d Alcohol 
+          # * 400 entspricht Volumen des Glases, * 5/100 enstpricht Alkoholgehalt in prozent, 
+          #* 0.8 Aufnahmeanteil im Körper, / 7 für Tage der Woche
+          Redwine_week <- (df_covariates_alcohol$`Average weekly red wine intake` * (100 * (12/100) * 0.8)) / 7 
+          Whitewine_week <- (df_covariates_alcohol$`Average weekly champagne plus white wine intake` * (100 * (12/100) * 0.8)) / 7 
+          Beer_week <- (df_covariates_alcohol$`Average weekly beer plus cider intake` * (400 * (4/100) * 0.8)) / 7 
+          Spirits_week <- (df_covariates_alcohol$`Average weekly spirits intake` * (3.75 * (20/100) * 0.8)) / 7 
+          Fortified_wine_week <- (df_covariates_alcohol$`Average weekly fortified wine intake` * (6.25 * (20/100) * 0.8)) / 7 
+          Other_week <- (df_covariates_alcohol$`Average weekly intake of other alcoholic drinks` * (200 * (4/100) * 0.8)) / 7
+          Alk_week_combined <- (data.frame(t(rbind(Redwine_week, Whitewine_week, Beer_week, Spirits_week, Fortified_wine_week, Other_week))))
+          Alk_week_g_d <- rowSums(Alk_week_combined, na.rm=TRUE)
+          
+          #Dann berechne ich für monatlichen Konsum g/d Alcohol
+          Redwine_mon <- (df_covariates_alcohol$`Average monthly red wine intake` * (100 * (12/100) * 0.8)) / 30 
+          Whitewine_mon <- (df_covariates_alcohol$`Average monthly champagne plus white wine intake` * (100 * (12/100) * 0.8)) / 30 
+          Beer_mon <- (df_covariates_alcohol$`Average monthly beer plus cider intake` * (400 * (4/100) * 0.8)) / 30 
+          Spirits_mon <- (df_covariates_alcohol$`Average monthly spirits intake` * (3.75 * (20/100) * 0.8)) / 30 
+          Fortified_wine_mon <- (df_covariates_alcohol$`Average monthly fortified wine intake` * (6.25 * (20/100) * 0.8)) / 30 
+          Other_mon <- (df_covariates_alcohol$`Average monthly intake of other alcoholic drinks` * (200 * (4/100) * 0.8)) / 30
+          Alk_mon_combined <- (data.frame(t(rbind(Redwine_mon, Whitewine_mon, Beer_mon, Spirits_mon, Fortified_wine_mon, Other_mon))))
+          Alk_mon_g_d <- rowSums(Alk_mon_combined, na.rm=TRUE)
+          
+          Alk <- data.frame(cbind(Alk_mon_g_d, Alk_week_g_d))
+          Alk <- data.frame(rowSums(Alk)) %>% #alcfrequency2 -> aus 6-> 0 machen (=never-drinker)
+            rename("g/d"= "rowSums.Alk.")
+          
+          #Frequency of alcohol: 1=Daily, 2= 3-4 times/week, 3= 1/week, 4=1-3/month, 5=Rarely, 6=Never, -3=Prefer not to answer
+          Alk$Frequency <- df_covariates$`Alcohol intake frequency.`
+          Alk$SEX <- covariates$SEX
+          Alk$`g/d`[Alk$Frequency == "-3"] <- NA    #If they prefer not to answer,we cannot make assumption
+          Alk$`g/d`[Alk$Frequency == "6"] <- 0
+          Alk$Frequency<-as.factor(Alk$Frequency)
+          summary(Alk$`g/d`)
+          Alk <- adjust_outliers(Alk, "g/d")
+          summary(Alk$`g/d`)
+          
+          
+          #hier berechne ich noch die geschlechtsspezifischen Grenzwerte der WHO 
+          #In UKB: 0=female, 1=male
+          #readout am Ende 1 Spalte mit Pathologischem Alkoholkonsum (> 60 bzw. 40g/d Alkohol) und riskantem Konsum (>24 bzw. 12 g/d)
+          Alk$SEX.umgekehrt <- ifelse(Alk$SEX == 0, 1, ifelse(Alk$SEX == 1, 0, Alk$SEX))
+          Alk$PatAlkoholkonsum <- (Alk$SEX * Alk$`g/d` / 60) + (Alk$SEX.umgekehrt * Alk$`g/d` / 40) 
+          Alk$PatAlkoholkonsum <- ifelse(Alk$PatAlkoholkonsum >= 1, 1, ifelse(Alk$PatAlkoholkonsum < 0.9999999999, 0, Alk$PatAlkoholkonsum))
+          Alk$ErhöhterAlkoholkonsum <- (Alk$SEX * Alk$`g/d` / 24) + (Alk$SEX.umgekehrt * Alk$`g/d` / 12) 
+          Alk$ErhöhterAlkoholkonsum <- ifelse(Alk$ErhöhterAlkoholkonsum >= 1, 1, ifelse(Alk$ErhöhterAlkoholkonsum < 0.9999999999, 0, Alk$ErhöhterAlkoholkonsum))
+
+          # merge new columns to df, and get rid of unnecessary alcohol columns
+          df_covariates <- df_covariates %>%
+            cbind(Path_Alk = Alk$PatAlkoholkonsum, High_Alk= Alk$ErhöhterAlkoholkonsum, Alk_g_d= Alk$`g/d`) 
+          df_covariates$Path_Alk <- as.factor(df_covariates$Path_Alk)
+          df_covariates$High_Alk <- as.factor(df_covariates$High_Alk)
+          
+          rm(Alk)
+
+
+
+          
+          
+          #sanity(df_covariates[c("eid", "Path_Alk", "High_Alk", "Alk_g_d")])
+          #rm(Alk, Alk_mon_combined, Alk_week_combined, Alk_mon_g_d, Alk_week_g_d, Beer_mon, Beer_week, Fortified_wine_mon, Fortified_wine_week, Other_mon, Other_week, Redwine_mon, Redwine_week, Spirits_mon, Spirits_week, Whitewine_mon, Whitewine_week)
+          #rm(df_covariates_alcohol, covariate_index_alcohol, covariate_index_smoking_status)
+```
+
+#### 6. Family history / CVR / Diabetes / Physical activity
+
+```{r}
+# a) Blood pressure
+# checks if both columns "Systolic blood pressure, automated reading1" and "Systolic blood pressure, automated reading2" have a value, 
+#if they do it calculates the mean of these values and assigns it to the new column "Bloodpressure". If not, the second ifelse() function checks which of 
+#the columns has a value and assigns it to the new column.
+       
+
+df_covariates$Bloodpressure_sys <- ifelse(
+            !is.na(df_covariates$`Systolic blood pressure, automated reading1`) & !is.na(df_covariates$`Systolic blood pressure, automated reading2`),
+            (df_covariates$`Systolic blood pressure, automated reading1` + df_covariates$`Systolic blood pressure, automated reading2`)/2,
+            ifelse(is.na(df_covariates$`Systolic blood pressure, automated reading1`), df_covariates$`Systolic blood pressure, automated reading2`, df_covariates$`Systolic blood pressure, automated reading1`)
+          )   
+#Calculate summaries 
+summary(df_covariates$Bloodpressure_sys)
+summary(df_covariates$`Systolic blood pressure, automated reading1`)
+summary(df_covariates$`Systolic blood pressure, automated reading2`)
+          
+          
+df_covariates$Bloodpressure_sys[is.na(df_covariates$Bloodpressure)] <- df_covariates$`Systolic blood pressure, manual reading` #take manual measurement if automatic is not present (reduces NA from 30k to 28k)
+
+#sanity(df_covariates[c("Bloodpressure", "Systolic blood pressure, automated reading1", "Systolic blood pressure, automated reading2")])
+
+# df_covariates$Bloodpressure <- cut(df_covariates$Bloodpressure,
+#                         breaks = c(0, 120, 130, 140, 160, 180, 300), 
+#                         labels = c("Optimal", "Normal", "High normal", "Grade 1 Hypertension", "Grade 2 Hypertension", "Grade 3 Hypertension"))
+          
+#sanity(df_covariates[c("Bloodpressure")])
+
+
+
+df_covariates$Bloodpressure_dia <- ifelse(
+  !is.na(df_covariates$`Diastolic blood pressure, automated reading1`) & !is.na(df_covariates$`Diastolic blood pressure, automated reading2`),
+  (df_covariates$`Diastolic blood pressure, automated reading1` + df_covariates$`Diastolic blood pressure, automated reading2`)/2,
+  ifelse(is.na(df_covariates$`Diastolic blood pressure, automated reading1`), df_covariates$`Diastolic blood pressure, automated reading2`, df_covariates$`Diastolic blood pressure, automated reading1`)
+)
+
+
+# Replace missing values in the Bloodpressure_dia column with manual readings if available
+df_covariates$Bloodpressure_dia[is.na(df_covariates$Bloodpressure_dia)] <- df_covariates$`Diastolic blood pressure, manual reading`
+
+# Calculate summaries again after replacement
+summary(df_covariates$Bloodpressure_dia)
+
+
+
+
+
+          
+#c) Medication
+# 1=cholesterol lowering medication, 2=blood pressure medication, 3=Insulin, 4=Hormone replacement therapy, 5=oral contraceptive pill
+#-7= None of the above, -1=do not know, -3=prefer not to answer
+          df_covariates <- df_covariates %>% mutate(Medication = coalesce(`Medication for cholesterol, blood pressure, diabetes, or take exogenous hormones (females)`, `Medication for cholesterol, blood pressure or diabetes (males)`))
+          
+                    
+          df_covariates$Medication[df_covariates$Medication <= 0 | is.na(df_covariates$Medication)] <- 0 
+          df_covariates$Medication[df_covariates$Medication >= 1 & df_covariates$Medication < 4] <- 1 #Summarize cholesterol, blood pressure and insulin to one level
+          df_covariates$Medication[df_covariates$Medication >= 4] <- 2 #Summarize hormone therapy
+          
+          
+          df_covariates$Medication <- factor(df_covariates$Medication, levels=c(0,1,2), labels= c("No Medication", "Metabolic", "Hormones"))
+          
+          #sanity(df_covariates[c("Medication", "Bloodpressure")])
+          
+          
+          #factor(df_covariates$`Smoking status`, levels=c(0, 1, 2), labels = c("Never", "Previous", "Current"))
+          
+#c) Family diabetes (labelled with code 9): 0= No, 1= Yes, 2 = Unknown (-> made 0)
+          df_covariates$Family_diabetes <- ifelse(df_covariates$`Illnesses of father` == 9 | df_covariates$`Illnesses of mother` == 9 | df_covariates$`Illnesses of siblings` == 9, 1, 0)
+          df_covariates$Family_diabetes[is.na(df_covariates$Family_diabetes)] <- 0
+          df_covariates$Family_diabetes <- as.factor (df_covariates$Family_diabetes)
+         # sanity(df_covariates[c("Family_diabetes")])
+          
+          
+#d) Physical activity -> for now removed, to little items available          
+          
+```
+
+#### 7. Multiple deprivation index
+
+```{r}
+#Index is measured separately for england/wales/scotland.
+#coalesce() function from dplyr library. This function returns the first non-NA value in the list of arguments.
+          df_covariates <- df_covariates %>% mutate(MultipleDeprivationIndex = coalesce(`Index of Multiple Deprivation (England)`,
+                                                                                        `Index of Multiple Deprivation (Scotland)`,
+                                                                                        `Index of Multiple Deprivation (Wales)`))
+          sum(is.na(df_covariates$MultipleDeprivationIndex))
+          
+```
+
+# Remove unnecessary columns
+
+```{r}
+levels(df_covariates$SEX)
+df_covariates <- df_covariates %>%
+            select(-(all_of(vec_alcohol))) 
+
+
+
+
+df_covariates <- df_covariates %>%
+            select(-"Systolic blood pressure, automated reading1",
+                   -"Systolic blood pressure, automated reading2",
+                   -"Systolic blood pressure, manual reading",
+                   -"Diastolic blood pressure, automated reading1",
+                   -"Diastolic blood pressure, automated reading2",
+                   -"Diastolic blood pressure, manual reading")
+
+
+df_covariates <- df_covariates %>%
+            select(-"Illnesses of father",
+                   -"Illnesses of mother",
+                   -"Illnesses of siblings",
+                   -"No-wear time bias adjusted average acceleration")
+                   
+
+
+df_covariates <- df_covariates %>%
+            select(-"Medication for cholesterol, blood pressure, diabetes, or take exogenous hormones (females)",
+                   -"Medication for cholesterol, blood pressure or diabetes (males)",
+                   -"Diabetes diagnosed by doctor")
+
+df_covariates <- df_covariates %>%
+            select(-"Index of Multiple Deprivation (England)",
+                   -"Index of Multiple Deprivation (Scotland)",
+                   -"Index of Multiple Deprivation (Wales)")
+
+
+df_covariates <- df_covariates %>%
+  select(-"Hand grip strength (left)",
+         -"Hand grip strength (right)")
+#sanity(df_covariates)
+
+
+#calculates complete cases in df_covariates
+          sum(complete.cases(df_covariates))
+
+```
+# Cap columns with physiological limits
+```{r}
+mapper <- read_excel(paste0(sharepoint_ukb, "/", master_table), sheet = "Mapper")
+
+# Apply the limiting function to df_covariates
+result <- limit_df(df_covariates, mapper)
+
+# The modified dataframe is now in result$df
+df_covariates <- result$df
+```
+
+
+# Run functions to handle NA values (Either imputation or removing incomplete rows)
+
+```{r}
+# Choose mode of removing NAs: Option a: "impute", Option b: "remove_rows"
+#############################################################
+na_mode <- "impute"  # "impute" or "remove"
+#############################################################
+df_cov_na_before <- summarize_na(df_covariates) #NAs before
+
+if (na_mode == "impute") {
+    df_cov_amount <- summarize_na(df_covariates)
+    df_covariates <- impute_categorical(df_covariates, covariate_final, keep_untouched = c("SEX", "Medication", "Family Diabetes"))
+    df_covariates <- impute_continuous(df_covariates, covariate_final, keep_untouched = c("AGE", "AGE_cat"))
+    # df_covariates <- impute_random(df_covariates, covariate_final)
+} else if (na_mode == "remove") {
+    df_covariates <- df_covariates[complete.cases(df_covariates), ]
+} else {
+    cat("Invalid mode specified.")
+}
+
+df_cov_na_after <- summarize_na(df_covariates) # NAs after (should be zero)
+```
+
+# Export df_covariates
+
+```{r}
+write.csv(df_covariates, file=paste(project_path, "/data/dataframes/df_covariates.csv", sep=''), row.names=FALSE)
+save(df_covariates, file=paste(project_path, "/data/dataframes/df_covariates.RData", sep='')) # Save df_covariates as .RData (preserves column classes)
+write.xlsx(df_cov_na_before, file=paste(project_path, "/supplement/NA_count_df_covariates.xlsx", sep=''))
+```

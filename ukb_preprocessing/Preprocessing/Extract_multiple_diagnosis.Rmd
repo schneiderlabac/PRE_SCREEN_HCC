@@ -1,0 +1,1064 @@
+---
+title: "Extract multiple diagnosis"
+author: "JC"
+date: "2024-05-04"
+output: html_document
+---
+
+```{r}
+source("../config.R") #Loads libraries, variables and global function
+
+```
+
+
+
+# Load HESIN
+```{r}
+#oeffne das Datenset mit Diagnosen der Patienten, hesin_diag. Diese Datei wird ständig aktualisiert, und ist nicht besonders groß, daher am besten immer neu aus raw-Datei.
+setwd(sharepoint_ukb)
+df_withdrawals <- read.delim(withdrawals_path)
+
+cols_to_read <- c("eid", "ins_index", "diag_icd10", "diag_icd9") #predefine cols for hesin/hesin_diag to be read
+hesin_diag <- fread(hesin_diag_path, select = cols_to_read) %>% check_and_remove_withdrawals(df_withdrawals)
+
+cols_to_read <- c("eid", "ins_index", "epistart")
+hesin <- fread(hesin_path, select = cols_to_read) %>% check_and_remove_withdrawals(df_withdrawals)
+setkey(hesin_diag, eid, ins_index)
+setkey(hesin, eid, ins_index)
+pat_icds <- merge(hesin_diag, hesin, by = c("eid", "ins_index"), all = TRUE)
+
+
+rm(hesin, hesin_diag)
+```
+
+
+# Transform HESIN
+```{r}
+# setwd(sharepoint_ukb)
+# df_basic <- fread("extracted/basic_info.csv") %>% select(c("eid", "53-0.0")) %>% check_and_remove_withdrawals(df_withdrawals) %>%
+#   rename(assessment = `53-0.0`) %>%  # Change column name of time  
+#   mutate(assessment = as.Date(assessment, format = "%Y-%m-%d"))
+
+setwd(sharepoint_ukb)
+df_basic <- fread("extracted/basic_info.csv") %>% check_and_remove_withdrawals(df_withdrawals) %>%
+  mutate(assessment = as.Date(assessment, format = "%Y-%m-%d"))
+  
+
+
+pat_icds <- merge(pat_icds, df_basic, by = "eid", all.x = TRUE) # merge with pat_icds dataframe
+rm(df_basic)
+pat_icds[, epistart := as.IDate(epistart, format = "%d/%m/%Y")]
+pat_icds[, difftime := as.numeric(difftime(assessment, epistart, units = "weeks"))/52.25]
+
+pat_icds_all <- pat_icds #stores all info here, as pat_icds itself will be cut-off at a defined timepoint. 
+
+pat_icds <- pat_icds[difftime >= -(timeframe)] #subsets our ICD info to only obtain data from the first {timeframe} years after initial assessment, e.g. 5 years, starting at baseline
+#pat_icds <- pat_icds[, .SD, .SDcols = !c("difftime", "assessment")] #remove unnecessary columns
+
+```
+
+# Load Metadata (: Create an excel sheet for all the diagnosis that you want to look into, before continuing here)
+```{r}
+#oeffne Projektspezifische ICD Schlüssel Datasets
+setwd(sharepoint_ukb)
+ICD_Groups <- read_excel(icd_dict_path, sheet = "ICD_Groups") %>% select(-c("n", "Summe"))
+ICD_Singles <- read_excel(icd_dict_path, sheet = "ICD_Singles") %>% select(-c("n", "Summe"))
+Patients_at_risk <- read_excel(icd_dict_path, sheet = "Patients at risk")
+
+
+par_subset <- par_subset[par_subset!="Blood_Parameters"] #Remove the Blood parameters as diagnosis label, only hard-coded diagnosis are of itnerest here
+
+Patients_at_risk <- Patients_at_risk[Patients_at_risk$Group %in% par_subset, ]
+par_icd_codes <- Patients_at_risk$ICD10
+
+```
+
+#ICD Starts with (wenn es eine ganze Gruppe von ICD10 codes ist dann diese code, die Anforderungen koennen beliebig lang hintereinander ergaenzt werden je nachdem wie viele Gruppen der ICD code hat)
+```{r}
+icd_dm<-subset(pat_icds, startsWith(as.character(pat_icds$diag_icd9), '250')|startsWith(as.character(pat_icds$diag_icd10), 'E10')| startsWith(as.character(pat_icds$diag_icd10), 'E11')| startsWith(as.character(pat_icds$diag_icd10), 'E12')| startsWith(as.character(pat_icds$diag_icd10), 'E13') | startsWith(as.character(pat_icds$diag_icd10), 'E14'))
+          
+icd_dm<- as.data.frame(icd_dm[!duplicated(icd_dm$eid),]) # #Step 2: Duplikate entfernen: 
+icd_dm$DM <- 1
+
+icd_dm<-select(icd_dm, c(eid, DM))
+```
+
+# ICD Groups (e.g. many icds for all subtypes of gastric cancer shall be fused in information "Gastric Cancer y/n)
+```{r}
+# Merge diagnosis of interest with all_pat_all_diag df (hesin_diag). 
+#Left_join auf Diagnosen -> alle nicht erwähnten Diagnosen "fallen raus", alle Duplikate werden entfernt
+pat_icds_labelled <- left_join(x= ICD_Groups, y= pat_icds, by = c("ICD10" = "diag_icd10")) %>% distinct()
+
+#Check for amount of diagnosis per actual ICD, instead of group. Likely here will be the correct amounts, while summarized will be less due to parallel coded diagnosis
+df_icd_groups_before <- pat_icds_labelled %>% group_by(Diagnosis, eid) %>% summarise(occurence = n()) %>% spread(Diagnosis, occurence) 
+sum_groups_before <- as.data.frame(colSums(df_icd_groups_before, na.rm=TRUE))
+
+# #groupby + summarises sortiert Dataset nach Diagnosegruppen und eid,  spread macht aus langem schmalen Dataset ein breites mit logical/boolean values
+df_icd_groups <- pat_icds_labelled %>% group_by(Group, eid) %>% summarise(occurence = n()) %>% spread(Group, occurence) 
+df_icd_groups[df_icd_groups > 1 & df_icd_groups < 100]<- 1 
+df_icd_groups[is.na(df_icd_groups)] <- 0
+sum_groups_after <- as.data.frame(colSums(df_icd_groups))
+rm(pat_icds_labelled, df_icd_groups_2)
+```
+# ICD Singles (if requested entity is diagnosis itself (e.g. NASH, NAFLD etc, or every subgroup should still behave as subgroup)
+```{r}
+# Merge diagnosis of interest with all_pat_all_diag df (hesin_diag). 
+#Left_join auf Diagnosen -> alle nicht erwähnten Diagnosen "fallen raus", alle Duplikate werden entfernt
+pat_icds_labelled <- left_join(x= ICD_Singles, y= pat_icds, by = c("ICD10" = "diag_icd10")) %>%  distinct() 
+
+# #groupby + summarises sortiert Dataset nach Diagnosegruppen und eid,  spread macht aus langem schmalen Dataset ein breites mit logical/boolean values
+df_icd_singles <- pat_icds_labelled %>% group_by(Diagnosis, eid) %>% summarise(occurence = n()) %>% spread(Diagnosis, occurence) 
+df_icd_singles[df_icd_singles > 1 & df_icd_singles < 10000]<- 1 
+df_icd_singles[is.na(df_icd_singles)] <- 0
+sum_singles <- as.data.frame(colSums(df_icd_singles))
+rm(pat_icds_labelled)
+```
+
+#Merging groups and singles
+```{r}
+df_icd <- full_join(df_icd_singles, df_icd_groups, by = "eid")
+df_icd <- merge(df_icd, icd_dm, by="eid", all=TRUE)
+df_icd <- replace(df_icd, is.na(df_icd), 0)
+```
+
+#Questionnaire info on diagnosis (e.g. "diabetes diagnosed by doctor")
+```{r}
+setwd(sharepoint_ukb)
+covariates <- fread("extracted/covariates.csv")
+df_dmdoc <- dplyr::select(covariates, eid, `2443-0.0`) %>%
+  rename(`DM Questionnaire` = `2443-0.0`) %>%
+  mutate(`DM Questionnaire` = if_else(`DM Questionnaire` == 1, 1, 0))
+
+pre_merge_cases <- sum(df_icd$DM == 1) # Count positive cases before merge
+print(paste("Number of positive cases of 'DM' before merge:", pre_merge_cases))
+df_icd <- merge(df_icd, df_dmdoc, by="eid", all.x=TRUE)
+df_icd$DM <- pmax(df_icd$DM, df_icd$`DM Questionnaire`, na.rm = TRUE) # Update the 'DM' column
+post_merge_cases <- sum(df_icd$DM == 1, na.rm = TRUE)
+print(paste("Number of positive cases of 'DM' after merge:", post_merge_cases)) # Count positive cases after merge
+df_icd <- df_icd %>%
+  select(-"DM Questionnaire")
+```
+
+# Merge NHS data onto eid data
+(All patients agreed to have NHS data transferred to UKB, so if not in NHS -> No diagnosis)
+```{r}
+setwd(sharepoint_ukb)
+df_eid <- fread("extracted/UKB_Patients_eids.csv") %>% check_and_remove_withdrawals(df_withdrawals)
+df_icd <- merge(df_eid, df_icd, by="eid", all.x =TRUE)
+print(paste("Nr of patients without any NHS entries:", nrow(df_icd) - sum(complete.cases(df_icd))))
+df_icd[is.na(df_icd)] <- 0
+df_icd <- df_icd[!duplicated(df_icd), ]
+
+# Compress values > 1 to 1
+for (column in names(df_icd)){
+  if (column != "eid" && is.numeric(df_icd[[column]])){
+    df_icd[[column]][df_icd[[column]] > 1] <- 1
+  }
+}
+```
+# Self-reported diagnosis
+```{r}
+# Create index table
+# self_diag_index <- fread(file.path(sharepoint_ukb, "meta/coding_selfreported_diag.tsv"))
+# 
+# 
+# self_diag_categories <- self_diag_index %>% filter(coding==-1)
+# 
+# 
+# # Create column "category" for overview, out of tree-based structure
+# self_diag_index <- self_diag_index %>% left_join(self_diag_categories, by = c("parent_id" = "node_id"), suffix = c("", ".y")) %>% select(-coding.y, -parent_id.y, -selectable.y) %>%
+#   rename(category= meaning.y)
+# 
+# update_category <- function(df) {
+#   for (i in 1:nrow(df)) {
+#     if (is.na(df$category[i])) {
+#       # Look up parent's category
+#       parent_category <- df$category[df$node_id == df$parent_id[i]]
+#       if (length(parent_category) > 0 && !is.na(parent_category[1])) {
+#         df$category[i] <- parent_category[1]
+#       }
+#     }
+#   }
+#   return(df)
+# }
+# 
+# previous_na_count <- sum(is.na(self_diag_index$category))
+# repeat {
+#   self_diag_index <- update_category(self_diag_index)
+#   current_na_count <- sum(is.na(self_diag_index$category))
+#   if (current_na_count == previous_na_count) {
+#     break
+#   }
+#   previous_na_count <- current_na_count
+# }
+# self_diag_index <- self_diag_index %>% filter(coding!= -1)
+# 
+# sheets_list <- list(
+#   "Diagnosis Index" = self_diag_index,
+#   "Categories" = self_diag_categories
+# )
+#write_xlsx(sheets_list, file.path(sharepoint_ukb, "meta/self_coded_diags.xlsx")) Don't overwrite this excel file please 
+
+
+# Extract all self-reported diagnosis data
+
+# setwd(sharepoint_ukb)
+# column_names <- fread("raw/ukb52200.csv", nrows = 0)
+# pattern <- "^20002-0\\..*$"
+# matching_columns <- grep(pattern, names(column_names), value = TRUE)
+# df_self_diag<- fread("raw/ukb52200.csv", select=c("eid", matching_columns)) %>% check_and_remove_withdrawals(df_withdrawals)
+# save(df_self_diag, file=paste0(sharepoint_ukb, "/extracted/df_self_diag.RData"))
+
+load(paste0(sharepoint_ukb, "/extracted/df_self_diag.RData"))
+self_diag_index <- read_excel(paste0(sharepoint_ukb, "/meta/self_coded_diags.xlsx"), sheet="Diagnosis Index")
+
+df_self_diag <- df_self_diag %>% #Create a long table with multiple rows per eid, as in hesin_diag
+  pivot_longer(
+    cols = starts_with("20002"),
+    names_to = "diag_nr",
+    values_to = "diagnosis"
+  ) %>% 
+  filter(!is.na(diagnosis)) #Remove empty rows
+  
+# Label diagnosis
+df_self_diag_labelled <- left_join(x=df_self_diag, y=self_diag_index, by = c("diagnosis" = "coding"), suffix = c("", ".y")) %>%
+  filter(!!sym(project_key) == 'y') %>%
+  select(-parent_id, -selectable, -node_id)
+
+# Index self-reported diagnosis on df_icd
+df_self_diag_groups <- left_join(df_self_diag_labelled, ICD_Groups, by=c("ICD_Code" = "ICD10"), suffix= c("", ".y")) %>% 
+  filter(!is.na(Group)) %>%
+  select(c(eid, Group)) %>%
+  rename(Diagnosis = Group) %>%
+  mutate(value = 1) %>%
+  pivot_wider(
+    names_from = Diagnosis,
+    values_from = value,
+  ) %>%
+  mutate(across(-eid, ~map_dbl(.x, ~if (is.null(.x)) 0 else 1)))
+
+df_self_diag_singles <- left_join(df_self_diag_labelled, ICD_Singles, by=c("ICD_Code" = "ICD10"), suffix= c("", ".y")) %>% 
+  filter(!is.na(Diagnosis)) %>%
+  select(c(eid, Diagnosis)) %>%
+  mutate(value = 1) %>%
+  pivot_wider(
+    names_from = Diagnosis,
+    values_from = value,
+  ) %>%
+  mutate(across(-eid, ~map_dbl(.x, ~if (is.null(.x)) 0 else 1)))
+
+df_self <- full_join(df_self_diag_groups, df_self_diag_singles, by = "eid") %>%
+  right_join(df_eid, by= "eid") %>%
+  mutate(across(-eid, ~replace_na(.x, 0))) %>%
+  as.data.frame() #%>%
+  #mutate(across(-eid, ~ as.factor(.x)))
+
+check_factor_levels(df_self)
+
+sum_self <- create_summary(df_self)
+
+rm(df_self_diag_groups, df_self_diag_singles, df_self_diag_labelled, df_self_diag)
+
+#setdiff(colnames(df_icd), colnames(df_self)) check the difference to df_icd
+
+```
+
+
+
+# Subsets and Export
+```{r}
+#df_diagnosis <- df_icd #only necessary when no merge of NHS and self-reported data
+setwd(project_path)
+load("data/dataframes/df_blood.RData")
+load("data/dataframes/df_covariates.RData")
+
+
+# if (project_key == "hcc"){
+#     df_blood_risk <- df_blood %>%
+#   select(c("eid", "Aspartate aminotransferase", "Alanine aminotransferase", "Gamma glutamyltransferase" )) %>%
+#   inner_join(select(df_covariates, eid, SEX), by = "eid") %>%
+#   mutate(
+#     Elevated_AST = if_else(SEX == "Female" & `Aspartate aminotransferase` > 35 | SEX == "Male" & `Aspartate aminotransferase` > 50, 1, 0),
+#     Elevated_ALT = if_else(SEX == "Female" & `Alanine aminotransferase` > 35 | SEX == "Male" & `Alanine aminotransferase` > 50, 1, 0),
+#     Elevated_GGT = if_else(SEX == "Female" & `Gamma glutamyltransferase` > 40 | SEX == "Male" & `Gamma glutamyltransferase` > 60, 1, 0)
+#   ) %>%
+#   mutate(Elevated_Liver_Enzymes = if_else(Elevated_AST == 1 | Elevated_ALT == 1 | Elevated_GGT == 1, 1, 0)) %>%
+#   select(-c("Aspartate aminotransferase", "Alanine aminotransferase", "Gamma glutamyltransferase", "SEX"))
+# }
+
+
+if (project_key == "cca") {   
+  df_blood_risk <- df_blood %>%
+  select(c("eid", "Aspartate aminotransferase", "Alanine aminotransferase", "Gamma glutamyltransferase", "Alkaline phosphatase" )) %>%
+  inner_join(select(df_covariates, eid, SEX), by = "eid") %>%
+  mutate(
+    Elevated_AST = if_else(SEX == "Female" & `Aspartate aminotransferase` > 35 | SEX == "Male" & `Aspartate aminotransferase` > 50, 1, 0),
+    Elevated_ALT = if_else(SEX == "Female" & `Alanine aminotransferase` > 35 | SEX == "Male" & `Alanine aminotransferase` > 50, 1, 0),
+    Elevated_GGT = if_else(SEX == "Female" & `Gamma glutamyltransferase` > 40 | SEX == "Male" & `Gamma glutamyltransferase` > 60, 1, 0),
+    Elevated_AP = if_else(SEX == "Female" & `Alkaline phosphatase` > 105 | SEX == "Male" & `Alkaline phosphatase` > 130, 1, 0)
+  ) %>%
+  mutate(Elevated_Liver_Enzymes = if_else(Elevated_AST == 1 | Elevated_ALT == 1 | Elevated_GGT == 1, 1, 0)) %>%
+  select(-c("Aspartate aminotransferase", "Alanine aminotransferase", "Gamma glutamyltransferase", "SEX", "Alkaline phosphatase"))
+  
+}
+#Append df_self data
+df_diagnosis <- full_join(df_icd, df_self, by = "eid", suffix = c(".icd", ".self"))
+icd_cols <- names(df_diagnosis)[str_detect(names(df_diagnosis), "\\.icd$")]
+self_cols <- names(df_diagnosis)[str_detect(names(df_diagnosis), "\\.self$")]
+df_diagnosis <- inner_join(df_diagnosis, df_blood_risk, by = "eid")
+
+# Remove suffixes to identify common columns
+common_base_cols <- sub("\\.icd$", "", icd_cols)
+common_cols_icd <- paste0(common_base_cols, ".icd")
+common_cols_self <- paste0(common_base_cols, ".self")
+
+# Vectorized approach to coalesce .icd and .self columns
+for(i in seq_along(common_cols_icd)) {
+  icd_col <- common_cols_icd[i]
+  self_col <- common_cols_self[i]
+  
+  df_diagnosis[[icd_col]] <- with(df_diagnosis, pmax(get(icd_col), get(self_col), na.rm = TRUE))
+}
+
+# Clean df
+df_diagnosis <- df_diagnosis %>%
+  select(-all_of(common_cols_self)) %>%
+  rename_with(~str_remove(.x, "\\.icd$")) %>%
+  convert_to_factor()
+
+#Create file paths
+sum_path <- paste0(project_path, "/supplement/ICD_occurences.xlsx")
+df_diagnosis_path <- paste0(project_path, "/data/dataframes/UKB_Patients_ICD_All.csv")
+
+
+# Create subset dataframes
+df_positives <- innerjoin_df_y(df_diagnosis) #Innerjoin on positive DOI Cases
+df_par <- filter_rows_with_pos_entries(df_diagnosis)
+innerjoin_df_y(df_par) #check to see how many positives are in your subset
+
+#Create summaries
+sum_par <- create_summary(df_par)
+sum_diagnosis <- create_summary(df_diagnosis)
+sum_positives <- create_summary(df_positives)
+
+
+# Write summary files
+write.xlsx(sum_diagnosis, file = sum_path, sheetName = "All", row.names = FALSE)
+write.xlsx(sum_positives, file = sum_path, sheetName = "Positives", append = TRUE, row.names = FALSE)
+write.xlsx(sum_par, file = sum_path, sheetName = "PAR", append = TRUE, row.names = FALSE)
+
+
+save(df_icd, file=paste(project_path, "/data/dataframes/df_icd.RData", sep=''))
+save(df_diagnosis, file=paste(project_path, "/data/dataframes/df_diagnosis.RData", sep=''))
+
+
+# Export the eids for patients at risk
+
+par_eids <- df_par %>% select(eid) # Export table for patients at risk subset
+innerjoin_df_y(par_eids)
+
+save(par_eids, file=paste0(project_path, "/data/dataframes/df_par_", timeframe, "_years.RData"))
+
+
+```
+
+
+
+
+# Vis Summary of Occurence of all diagnosis
+```{r}
+
+plot_all <- barplot_diags(df_diagnosis, diags_to_remove = c("Arterial hypertension", "DM"))
+
+plot_positives <- barplot_diags(df_positives, diags_to_remove = c("Arterial hypertension", "DM"))
+
+plot_par <- barplot_diags(df_par, diags_to_remove = c("Arterial hypertension", "DM"))
+
+
+```
+
+
+#Vis Diagnosis Occurence (Relative Comparison Control to DOI)
+```{r}
+# Prepare your data
+sum_raw_pos <- left_join(sum_diagnosis, sum_positives, by="Diagnosis") %>%
+  filter(Diagnosis != "Hepatobiliary cancer") %>%
+  arrange(desc(Percentage.y)) %>%
+  mutate(Legend = LETTERS[1:45])
+
+sum_par_pos <- left_join(sum_par, sum_positives, by="Diagnosis") %>%
+  filter(Diagnosis != "Hepatobiliary cancer") %>%
+  arrange(desc(Percentage.y)) %>%
+  mutate(Legend = LETTERS[1:45])
+
+
+sum_pos <- left_join(sum_diagnosis, sum_positives, by="Diagnosis") %>%
+  left_join(sum_par, by="Diagnosis") %>%
+  filter(Diagnosis != "Hepatobiliary cancer") %>%
+  arrange(desc(Percentage.y)) %>%
+  mutate(Legend = LETTERS[1:45])
+
+
+
+
+comparison_plot_diags(sum_pos, base_size=24)
+
+```
+
+
+
+
+
+
+
+#Stacked Bars DOI Etiologies for Liver disease
+
+```{r}
+load(paste0(project_path, "/data/dataframes/df_y.RData"))
+
+priority_order <- c("Cirrhosis", "Viral Hepatitis", "CLD", "No Liver disease")
+color_map <- c("Cirrhosis" = "#22a884", 
+               "Viral Hepatitis" = "#414487", 
+               "CLD" = "#fde725", 
+               "No Liver disease" = "#b7b7b7")
+
+pat_cld <- pat_icds[pat_icds$diag_icd10 %in% par_icd_codes | pat_icds$diag_icd9 %in% par_icd_codes, ] %>%
+  select(c("eid", "diag_icd9", "diag_icd10", "epistart")) %>%
+  left_join(Patients_at_risk, by = c("diag_icd10" = "ICD10")) %>%
+  right_join(df_y, by = "eid") %>%
+  subset(status==1) %>%
+  select(-c("location_name", "location_code", "location_nr", "location_country", "country_code", "split_ext", "split_int"))
+
+pat_cld$epistart[is.na(pat_cld$Group)] <- as.Date(pat_cld$date_of_diag)
+
+pat_cld$Group[is.na(pat_cld$Group)] <- "No Liver disease"
+pat_cld$Group[!pat_cld$Group %in% par_subset] <- "No Liver disease" #Replace all non-matching groups with "No LD"
+pat_cld$Group <- factor(pat_cld$Group, levels=priority_order)
+
+summary(pat_cld$Group)
+
+priority <- function(diagnosis) {
+  case_when(
+    diagnosis == "Cirrhosis" ~ 1,
+    diagnosis == "Viral Hepatitis" ~ 2,
+    diagnosis == "CLD" ~ 3,
+    diagnosis == "No Liver disease" ~ 4,
+    TRUE ~ 5  # Assign a lower priority to other diagnoses
+  )
+}
+
+
+pat_cld <- pat_cld %>%
+  group_by(eid)
+
+# Node 0 represents first visit to hospital after assessment
+pat_cld_node0 <- pat_cld %>%
+  mutate(Priority = priority(Group)) %>%
+  group_by(eid) %>%
+  filter(epistart == min(epistart)) %>%
+  arrange(eid, Priority) %>%
+  filter(row_number() == 1) %>%
+  ungroup() %>%
+  select(-Priority)
+
+summary_node0 <- pat_cld_node0 %>%
+  group_by(Group) %>%
+  summarize(Count = n(), .groups = 'drop') %>%
+  mutate(Time = "First \nEHR") %>%
+  mutate(Order = 1 ) %>%
+  mutate(Priority = priority(Group)) %>%
+  arrange(Priority) %>%
+  mutate(Percentage = round(Count / sum(Count) * 100)) 
+
+
+#  Node 1 represents summary of all visits (together with prioritising diagnosis, this leaves the most dire diagnosis present)
+pat_cld_node1 <- pat_cld %>%
+  mutate(Priority = priority(Group)) %>%
+  group_by(eid) %>%
+  #filter(epistart == max(epistart)) %>%   #better to take all incidents than just the last, as not all diags get coded everytime
+  arrange(eid, Priority) %>%
+  filter(row_number() == 1) %>%
+  ungroup() %>%
+  select(-Priority)
+
+summary_node1 <- pat_cld_node1 %>%
+  group_by(Group) %>%
+  summarize(Count = n(), .groups = 'drop') %>%
+  mutate(Time = paste0("Prior to\n", DOI)) %>%
+  mutate(Order = 2 ) %>%
+  mutate(Priority = priority(Group)) %>%
+  arrange(Priority) %>%
+  mutate(Percentage = round(Count / sum(Count) * 100))
+
+
+# View the summaries
+print(summary_node0)
+print(summary_node1)
+
+
+# Merge timepoints
+combined_data <- rbind(summary_node0, summary_node1)
+
+
+
+
+
+distribution_plot <- stacked_bars_time_comparison(combined_data, 
+                                             base_size = 22, 
+                                             priority_order = priority_order,
+                                             color_map = color_map)
+
+# Print the plot
+print(distribution_plot )
+
+# Save the plot
+ggsave(filename = file.path(project_path, paste0("supplement_visuals/", DOI, "_Distributions_diagnosis.svg")), 
+       plot = distribution_plot , width = 12, height = 8, bg = "white")
+```
+
+
+
+
+
+
+```{r}
+pat_cld_all <- pat_icds_all[pat_icds_all$diag_icd10 %in% par_icd_codes] %>%
+  select(c("eid", "diag_icd10", "epistart")) %>%
+  left_join(Patients_at_risk, by = c("diag_icd10" = "ICD10")) 
+
+df_y_only <- df_y[df_y$status==1] %>%
+  select(-c("location_name", "location_code", "location_nr", "location_country", "country_code", "split_ext", "split_int"))
+
+pat_cld_all$epistart <- ymd(pat_cld_all$epistart)
+df_y_only$date_of_diag <- ymd(df_y_only$date_of_diag)
+
+# Modify pat_cld_all to add date_of_diag as epistart for "No Liver disease" cases
+pat_cld_all <- pat_cld_all %>%
+  right_join(df_y_only, by = "eid") %>%
+  group_by(eid) %>%
+  mutate(
+    Group = ifelse(all(is.na(Group)), "No Liver disease", first(na.omit(Group))),
+    epistart = case_when(
+      !is.na(epistart) ~ epistart,
+      Group == "No Liver disease" & !is.na(date_of_diag) ~ date_of_diag,
+      Group == "No Liver disease" & is.na(date_of_diag) & !is.na(date_of_death) ~ date_of_death,
+      TRUE ~ NA_Date_
+    )
+  ) %>%
+  ungroup()
+
+total_patients <- n_distinct(pat_cld_all$eid)
+print(paste("Total patients before filtering:", total_patients))
+
+
+
+pat_cld_node2 <- pat_cld_all %>%
+  filter(epistart <= date_of_diag + years(2))
+
+included_patients <- n_distinct(pat_cld_node2$eid)
+print(paste("Patients included after filtering:", included_patients))
+
+missing_patients <- anti_join(pat_cld_all, pat_cld_node2, by = "eid")
+print(paste("Number of missing patients:", nrow(missing_patients)))
+
+if (nrow(missing_patients) > 0) {
+  print("Details of missing patients:")
+  print(missing_patients %>% select(eid, Group, epistart, date_of_diag))
+  
+  # Add these missing patients back as "No Liver disease"
+  missing_patients_added <- missing_patients %>%
+    mutate(
+      Group = "No Liver disease",
+      epistart = date_of_diag  # Set epistart to date_of_diag for these patients
+    ) %>%
+    select(names(pat_cld_node2))  # Ensure column consistency
+  
+  pat_cld_node2 <- bind_rows(pat_cld_node2, missing_patients_added)
+}
+
+
+
+summary_node2 <- pat_cld_node2 %>%
+  mutate(Priority = priority(Group)) %>%
+  group_by(eid) %>%
+  arrange(eid, Priority) %>%
+  slice(1) %>%  # Take the first (highest priority) diagnosis for each patient
+  ungroup() %>%
+  group_by(Group) %>%
+  summarize(Count = n(), .groups = 'drop') %>%
+  mutate(Time = paste0("0-2 y\nafter ", DOI)) %>%
+  mutate(Order = 3) %>%
+  mutate(Priority = priority(Group)) %>%
+  arrange(Priority) %>%
+  mutate(Percentage = round(Count / sum(Count) * 100))
+
+
+#Diagnostics
+
+print(paste("Total HCC patients:", nrow(df_y_only)))
+print(paste("Patients in pat_cld_all:", n_distinct(pat_cld_all$eid)))
+print(paste("Patients in pat_cld_node2:", n_distinct(pat_cld_node2$eid)))
+print(paste("Patients in summary_node2:", sum(summary_node2$Count)))
+missing_patients <- anti_join(pat_cld_all, pat_cld_node2, by = "eid")
+print(paste("Number of missing patients:", nrow(missing_patients)))
+
+# Print the summary to check
+print(summary_node2)
+
+
+combined_data <- rbind(combined_data, summary_node2)
+updated_plot <- stacked_bars_time_comparison(combined_data, base_size = 22, priority_order = priority_order, color_map = color_map)
+ggsave(filename = file.path(project_path, paste0("supplement_visuals/", DOI, "_Distributions_Updated.svg")), 
+       plot = updated_plot, width = 12, height = 8, bg = "white")
+
+
+
+
+```
+
+
+```{r}
+# Step 1: Check initial patient count and group distribution
+total_patients <- n_distinct(pat_cld_all$eid)
+
+initial_group_distribution <- pat_cld_all %>%
+  group_by(eid) %>%
+  summarize(
+    Groups = list(unique(na.omit(Group))),
+    Has_Liver_Disease = length(unique(na.omit(Group))) > 0
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Cirrhosis = sapply(Groups, function(x) "Cirrhosis" %in% x),
+    Viral_Hepatitis = sapply(Groups, function(x) "Viral Hepatitis" %in% x),
+    CLD = sapply(Groups, function(x) "CLD" %in% x),
+    No_Liver_Disease = !Has_Liver_Disease
+  ) %>%
+  summarize(
+    Cirrhosis = sum(Cirrhosis),
+    `Viral Hepatitis` = sum(Viral_Hepatitis),
+    CLD = sum(CLD),
+    `No Liver disease` = sum(No_Liver_Disease)
+  ) %>%
+  pivot_longer(everything(), names_to = "Group", values_to = "n") %>%
+  mutate(Percentage = n / total_patients * 100) %>%
+  arrange(desc(n))
+
+print("Initial patient count and group distribution:")
+print(paste("Total patients:", total_patients))
+print(initial_group_distribution)
+```
+
+
+```{r}
+pat_cld$epistart[is.na(pat_cld$Group)] <- as.Date(pat_cld$date_of_diag)
+
+pat_cld$Group[is.na(pat_cld$Group)] <- "No Liver disease"
+pat_cld$Group[!pat_cld$Group %in% par_subset] <- "No Liver disease" #Replace all non-matching groups with "No LD"
+pat_cld$Group <- factor(pat_cld$Group, levels=priority_order)
+
+summary(pat_cld$Group)
+
+priority <- function(diagnosis) {
+  case_when(
+    diagnosis == "Cirrhosis" ~ 1,
+    diagnosis == "Viral Hepatitis" ~ 2,
+    diagnosis == "CLD" ~ 3,
+    diagnosis == "No Liver disease" ~ 4,
+    TRUE ~ 5  # Assign a lower priority to other diagnoses
+  )
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Ignore stuff below here
+
+
+
+
+
+
+
+Visualization Chronic Liver Disease - HCC
+```{r}
+
+# Count unique eids with no entry in diag_icd10
+count_removed_eids <- pat_cld %>%
+  filter(is.na(diag_icd10)) %>%
+  summarise(count = n_distinct(eid)) %>%
+  pull(count)
+
+#Calculate for each patient how much time only diagnosis of 
+
+cancer_diag_dates <- pat_cld %>%
+  select(eid, date_of_diag) %>%
+  distinct()  # Assuming one cancer diagnosis date per patient
+
+
+pat_cld <- pat_cld %>%
+  filter(!is.na(diag_icd10)) %>%
+  select(-date_of_diag) %>%
+  left_join(cancer_diag_dates, by = "eid") %>%
+  mutate(
+    epistart = as.Date(epistart, format = "%d/%m/%Y"),
+    date_of_diag = as.Date(date_of_diag, format = "%Y-%m-%d"),
+  ) %>%
+  arrange(eid, epistart)
+
+pat_cld <- pat_cld %>%
+  group_by(eid) %>%
+  arrange(eid, epistart) %>%
+   mutate(
+    next_eid = lead(eid),
+    next_epistart = lead(as.Date(epistart, format = "%d/%m/%Y")),
+    end_date = dplyr::if_else(
+      eid == next_eid & epistart < date_of_diag, 
+      next_epistart, 
+      date_of_diag, 
+      missing = as.Date(NA)
+    ),
+    duration = ifelse(is.na(end_date) & epistart < date_of_diag, as.numeric(date_of_diag - epistart),
+                      ifelse(epistart < date_of_diag, as.numeric(end_date - epistart), 0))
+  ) #%>%
+  #ungroup() #%>%
+ # select(-next_eid, -next_epistart)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+library(networkD3)
+library(dplyr)
+ 
+# A connection data frame is a list of flows with intensity for each flow
+links <- data.frame(
+  source=c("group_A","group_A", "group_B", "group_C", "group_C", "group_E"), 
+  target=c("group_A","group_D", "group_E", "group_F", "group_G", "group_H"), 
+  value=c(2,3, 2, 3, 1, 3)
+  )
+ 
+# From these flows we need to create a node data frame: it lists every entities involved in the flow
+nodes <- data.frame(
+  name=c(as.character(links$source), 
+  as.character(links$target)) %>% unique()
+)
+ 
+# With networkD3, connection must be provided using id, not using real name like in the links dataframe.. So we need to reformat it.
+links$IDsource <- match(links$source, nodes$name)-1 
+links$IDtarget <- match(links$target, nodes$name)-1
+ 
+# Make the Network
+p <- sankeyNetwork(Links = links, Nodes = nodes,
+              Source = "IDsource", Target = "IDtarget",
+              Value = "value", NodeID = "name", 
+              sinksRight=FALSE)
+p
+
+
+```
+
+
+
+
+
+
+```{r}
+plot_pie_chart <- function(data, title = "Pie Chart") {
+  ggplot(data, aes(x = "", y = Count, fill = Group)) +
+    geom_bar(width = 1, stat = "identity") +
+    coord_polar("y", start = 0) +
+    geom_text(aes(label = Count), position = position_stack(vjust = 0.5),
+              size = 12,  # Increase the text size for numbers
+              color = "black") +
+    scale_fill_brewer(palette = "Set3") +  # Using a Brewer color palette
+    theme_void() +
+    theme(legend.title = element_blank(),
+          legend.text = element_text(size = 30),  # Increase the text size for legend
+          legend.position = "right") +  # Adjust legend position
+    labs(title = title, fill = "Group")
+}
+
+# Example usage with your tibble
+pie_chart_node0 <- plot_pie_chart(summary_node0, title = "Node 0 Distribution")
+print(pie_chart_node0)
+setwd(project_path)
+ggsave(filename = file.path(project_path, paste0("supplement_visuals/", DOI, "_Distributions_0.svg")), 
+       plot = pie_chart_node0, width = 10, height = 7, bg = "white")
+
+
+pie_chart_node1 <- plot_pie_chart(summary_node1, title = "Node 1 Distribution")
+
+# To display the plots
+
+print(pie_chart_node1)
+ggsave(filename = file.path(project_path, paste0("supplement_visuals/", DOI, "_Distributions_1.svg")), 
+       plot = pie_chart_node1, width = 10, height = 7, bg = "white")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Ignore this for now
+
+
+
+
+
+
+
+
+```{r}
+library(dplyr)
+
+pat_cld_summary <- pat_cld_summary %>%
+  # Join with the total durations data
+  left_join(total_durations, by = "eid") %>%
+  # Add a rank column based on conditions
+  group_by(eid) %>%
+  mutate(
+    has_viral_hepatitis = "Viral Hepatitis" %in% Etiology,
+    has_cirrhosis = "Cirrhosis" %in% Etiology,
+    has_sld = "SLD" %in% Etiology,
+    rank = case_when(
+      has_viral_hepatitis & !has_cirrhosis & !has_sld & total_duration_eid > 1 ~ 1,
+      has_viral_hepatitis & has_cirrhosis & total_duration_eid > 1 ~ 2,
+      has_cirrhosis & !has_viral_hepatitis & !has_sld ~ 3,
+      has_sld & has_cirrhosis ~ 4,
+      has_sld & !has_cirrhosis & !has_viral_hepatitis ~ 5,
+      TRUE ~ 6  # Default rank if none of the above conditions are met
+    )
+  ) %>%
+  ungroup() %>%
+  arrange(rank, desc(total_duration_eid))
+
+plot <- ggplot(pat_cld_summary, aes(x = reorder(factor(eid), rank), y = as.numeric(total_duration), fill = Etiology)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Patient ID", y = "Duration (Days)", fill = "Condition") +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank()
+  )
+
+print(plot)
+
+
+
+
+
+
+# Calculate total duration for each eid
+total_durations <- pat_cld_summary %>%
+  group_by(eid) %>%
+  summarise(total_duration_eid = sum(as.numeric(total_duration))) %>%
+  arrange(desc(total_duration_eid))
+
+# Reorder the eids based on total duration
+pat_cld_summary$eid <- factor(pat_cld_summary$eid, levels = total_durations$eid)
+
+
+# Create the sorted stacked bar plot
+plot <- ggplot(pat_cld_summary, aes(x = eid, y = as.numeric(total_duration), fill = Etiology)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Patient ID", y = paste("Duration (Days) until" , DOI), fill = "Condition") +
+  theme(
+    legend.position = "bottom",  # Adjust legend position
+    axis.text.x = element_blank(),  # Remove x-axis labels
+    axis.ticks.x = element_blank(),  # Optionally remove x-axis ticks
+    #axis.title.x = element_blank()   # Remove x-axis title
+  )
+
+print(plot)
+
+# Save the plots
+ggsave(filename = file.path(supplement_visuals_dir, paste0("ICD_Intervall_until_", IOI, "_", Sys.Date(), ".png")), 
+       plot = plot, width = 12, height = 8, bg= "white")
+ggsave(filename = file.path(supplement_visuals_dir, paste0("ICD_Relations_", IOI, "_", Sys.Date(), ".svg")), 
+       plot = plot, width = 12, height = 8, bg= "white")
+
+# pat_cld_wide <- pat_cld_summary %>%
+#   pivot_wider(
+#     names_from = Etiology,
+#     values_from = total_duration,
+#     values_fill = list(total_duration = as.difftime(0, units = "days"))  # Fill missing values with 0 days
+#   )
+```
+
+
+```{r}
+pat_cld <- pat_icds[pat_icds$diag_icd10 %in% par_icd_codes | pat_icds$diag_icd9 %in% par_icd_codes, ] %>%
+  select(c("eid", "diag_icd9", "diag_icd10", "epistart")) %>%
+  left_join(ICD_Singles, by = c("diag_icd10" = "ICD10")) %>%
+  right_join(df_y, by = "eid")
+
+
+summary_table <- pat_cld %>%
+  group_by(diag_icd10) %>%
+  summarize(Count = n()) %>%
+  left_join(ICD_Singles, by = c("diag_icd10" = "ICD10")) %>%
+  select(diag_icd10, Count, Diagnosis)
+
+pat_cld <- left_join(df_y, pat_cld) %>%
+  mutate(epistart = as.Date(epistart, format = "%d/%m/%Y")) %>%
+  group_by(eid) %>%
+  slice_min(epistart, n = 1)
+
+
+pat_cld$date_of_diag <- as.Date(pat_cld$date_of_diag)
+pat_cld$duration <- as.numeric(difftime(pat_cld$date_of_diag, pat_cld$epistart, units = "days"))
+pat_cld <- pat_cld[order(pat_cld$duration), ]
+pat_cld$eid <- with(pat_cld, reorder(as.factor(eid), -duration))
+pat_cld$duration_years <- pat_cld$duration / 365.25
+
+pat_cld <- pat_cld %>%
+  arrange(Group, duration_years)
+
+# Plot
+plot <- ggplot(pat_cld, aes(x = reorder(as.factor(eid), duration_years), y = duration_years, fill = Group)) +
+  geom_bar(stat = "identity", position = "dodge") +  # Use dodge to separate the bars by groups
+  labs(
+    title = "Duration between diagnosis of Chronic Liver Disease and HCC in Years",
+    x = "",
+    y = "Duration (Years)"
+  ) +
+  scale_fill_discrete(name = "Group") +  # Add a legend for the groups
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank(),  # Remove x-axis labels
+    axis.ticks.x = element_blank(),  # Optionally remove x-axis ticks
+    axis.title.x = element_blank()   # Remove x-axis title
+  )
+plot
+
+# Create the 'supplement_visuals' directory
+supplement_visuals_dir <- file.path(project, "supplement_visuals")
+dir.create(supplement_visuals_dir, showWarnings = FALSE) # Create the directory if it doesn't already exist
+
+# Save the plots
+ggsave(filename = file.path(supplement_visuals_dir, paste0("Timespan from CLD to ", DOI, ".png")), 
+       plot = plot, width = 10, height = 12, bg= "white")
+ggsave(filename = file.path(supplement_visuals_dir, paste0("Timespan from CLD to ", DOI, ".svg")), 
+       plot = plot, width = 10, height = 12, bg = "white")
+
+plot
+
+```
+
+
+```{r}
+# Plot
+plot <- ggplot(pat_cld, aes(x = epistart, xend = date_of_diag, y = as.factor(eid), yend = as.factor(eid))) +
+  geom_segment(aes(color = duration < 0), size = 0.3) +  # Color lines with negative duration in red
+  scale_color_manual(values = c("black", "red")) +  # Set custom colors
+  labs(
+    title = "Timespan between diagnosis of Chronic Liver Disease and HCC",
+    x = "Time",
+    y = "EID"
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),  # Remove y-axis tick labels
+        legend.position = "none")  # Remove legend
+
+# Create the 'supplement_visuals' directory
+supplement_visuals_dir <- file.path(project, "supplement_visuals")
+dir.create(supplement_visuals_dir, showWarnings = FALSE) # Create the directory if it doesn't already exist
+
+# Save the plots
+ggsave(filename = file.path(supplement_visuals_dir, paste0("Timespan from CLD to ", DOI, ".png")), 
+       plot = plot, width = 10, height = 12, bg= "white")
+ggsave(filename = file.path(supplement_visuals_dir, paste0("Timespan from CLD to ", DOI, ".svg")), 
+       plot = plot, width = 10, height = 12, bg = "white")
+
+plot
+```
+
+
+

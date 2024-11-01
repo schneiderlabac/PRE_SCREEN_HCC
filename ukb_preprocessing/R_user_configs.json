@@ -1,0 +1,18 @@
+{
+  "_comment": "This is a configuration file for user-specific settings. Each key represents a unique user ID with corresponding configurations. Note: JSON syntax requires double quotes for strings and does not support single quotes or comments (// or #) like other programming languages. Arrays are denoted with square brackets [], and objects (key-value pairs) with curly braces {}.",
+  "XYZ": {
+    "home": "C:/Users/XYZ/OneDrive/Documents",
+    "ukb": "E:/public/ukb",
+    "sharepoint": "C:/Users/XYZ/SHAREPOINT",
+    "project_key": "hcc",
+    "biobank_key": "ukb",
+    "ukb_scripts": "C/Github/ukb_scripts",
+    "IOI": "C220",
+    "IOIs": [
+      "C220"
+    ],
+    "DOI": "HCC",
+    "master_table": "meta/Master_Table.xlsx",
+    "na_mode": "impute"
+  }
+}

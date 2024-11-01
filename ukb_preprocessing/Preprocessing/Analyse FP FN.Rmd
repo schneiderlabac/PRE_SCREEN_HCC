@@ -1,0 +1,360 @@
+---
+title: "Post Modelling Tables"
+output: html_notebook
+---
+
+
+
+```{r}
+source("../config.R") 
+```
+
+
+#### 1. EID, ICD, Covariates, PAR(Importing tables previously processed)
+```{r}
+#setwd(drive)
+#df_eid <- fread("ukb52200.csv", select=c("eid")) %>%    #all eids in UKB
+#write.csv(df_eid, file="C:/Users/Jan/OneDrive/Dokumente/PostDoc/Patient_tables/UKB_Patients_eids.csv", row.names=FALSE)    
+
+#a) df_eid 
+setwd(sharepoint_ukb)
+df_withdrawals <- read.delim("raw/withdrawals.txt")
+df_eid <- fread("extracted/UKB_Patients_eids.csv") %>% check_and_remove_withdrawals(df_withdrawals)
+
+#b) Covariate data for all 502411 patients: df_covariates 502411
+#Importing df_covariates: Preprocessing performed in Script "Extract and process covariates"
+setwd(project_path)
+load("data/dataframes/df_covariates.RData")
+df_covariates <- check_and_remove_withdrawals(df_covariates, df_withdrawals) %>%
+  select(-c(`Date of assessment`, "AGE_cat", "UKB assessment centre"))
+
+
+#c) Diagnosis data for selected  diagnosis (import diagnosis data for selected diagnosis in Script "Extract_multiple_Diagnosis"))
+setwd(project_path)
+load("data/dataframes/df_diagnosis.RData")
+df_diagnosis <- df_diagnosis %>% check_and_remove_withdrawals(df_withdrawals)
+#sanity(df_diagnosis)
+
+
+
+
+####### Additional processing
+
+#Recode Ethnicity to match with levels in All Of Us Cohort
+df_covariates <- df_covariates %>%
+    mutate(
+        Ethnicity = fct_recode(
+            Ethnicity,
+            "Black" = "Black or Black british",
+            "Asian" = "Chinese",
+            "Asian" = "Asian or Asian british",
+            "Other/Unknown" = "Unknown",
+            "Other/Unknown" = "Mixed",
+            "Other/Unknown" = "Other"
+        ),
+        Ethnicity = fct_expand(Ethnicity, "Latinx") %>%
+                    fct_relevel(sort)
+    )
+
+
+
+```
+
+#### 2. Blood sample data for all 502411 patients df_blood 502411
+
+```{r}
+setwd(sharepoint_ukb)
+df_blood <- fread("extracted/UKB_Patients_blood.csv") %>% check_and_remove_withdrawals(df_withdrawals)
+
+# changing names to measured parameters
+#Blood_Marker_Index <- read_excel("meta/Master_Table_JC.xlsx", sheet="Blood count and biochemistry")           #Import Index dataframe
+Blood_Marker_Index <- read_excel(master_table, sheet="Blood count and biochemistry")    
+Blood_Marker_Index$datafield <- paste0(Blood_Marker_Index$datafield, '-0.0')    #adapt syntax
+blood_names <- Blood_Marker_Index$Description                                   #Create names vector
+blood_names <- c("eid", blood_names)                                            #add eid in front of name vector
+df_blood <- setNames(df_blood, blood_names)                                     #Change names from codes to actual measurements
+
+#Overview and handling of NAs by imputing the most common value or removing
+na_blood_col <- data.frame(na_columnwise(df_blood))
+na_blood_row <- rowSums(is.na(df_blood))
+hist(na_blood_row)
+#write.xlsx(na_blood_col, file=paste(project, "/supplement/NA_count_df_blood.xlsx", sep=''))
+
+if (na_mode == "impute") {
+  summary(df_blood[,1:5])
+  df_blood <- df_blood %>% 
+    mutate_at(vars(-1), mean.impute) %>% # Apply mean.impute to all columns except the first one
+    select(-c("Rheumatoid factor", "Oestradiol")) #delete columns with mostly NA (Oestradiol 402.879 NAs; Rheumatoid factor 437.202 NAs)
+  summary(df_blood[,1:5])
+  
+} else if (na_mode == "remove") {     # Your removal code here
+  df_blood <- omit.NA(df_blood, 20)   # Delete rows with >= 20 NAs per Row
+  df_blood <- df_blood %>% #delete columns with mostly NA values (Lipoprotein A 111.652 NAs; Oestradiol 402.879 NAs; Rheumatoid factor 437.202 NAs)
+  select(-c("Rheumatoid factor", "Oestradiol"))
+}
+```
+
+
+#### 3. Prediction Values from Modelling + df_y
+```{r}
+col_subset <- "Model_TOP15"
+row_subset <- "all"
+
+pred_val <- read_excel(file.path(project_path, "Models/Pipelines/RFC/combined_output/val/Prediction_values_combined.xlsx"), sheet= paste0(row_subset, "_", col_subset))  #Change sheet as desired by changing col/row subset variables
+
+
+pred_val <- inner_join(pred_val, df_covariates, by="eid")
+
+if (sum(pred_val$true) != sum(pred_val$status_cancerreg)) {
+  warning("Positive cases do not match")
+} else {
+  print("True cases match. You may continue!") 
+}
+ 
+
+#Define thresholds and create classes
+low_threshold <- 0.55
+
+pred_val <- pred_val %>%
+  mutate(
+    TP = if_else(status_cancerreg == 1 & y_pred > low_threshold, 1, 0),
+    TN = if_else(status_cancerreg == 0 & y_pred < low_threshold, 1, 0),
+    FP = if_else(status_cancerreg == 0 & y_pred > low_threshold, 1, 0),
+    FN = if_else(status_cancerreg == 1 & y_pred < low_threshold, 1, 0)
+  )
+
+mean_TP <- mean(pred_val$difftime[pred_val$TP == 1], na.rm = TRUE)
+sd_TP <- sd(pred_val$difftime[pred_val$TP == 1], na.rm = TRUE)
+
+# Calculate mean and standard deviation for FN == 1
+mean_FN <- mean(pred_val$difftime[pred_val$FN == 1], na.rm = TRUE)
+sd_FN <- sd(pred_val$difftime[pred_val$FN == 1], na.rm = TRUE)
+
+# Print the results
+cat("Mean (TP == 1):", mean_TP, "SD (TP == 1):", sd_TP, "\n")
+cat("Mean (FN == 1):", mean_FN, "SD (FN == 1):", sd_FN, "\n")
+
+
+
+```
+
+
+# Checking significance
+```{r}
+female_proba <- pred_val %>% filter(SEX == "Female") %>% pull(proba)
+male_proba <- pred_val %>% filter(SEX == "Male") %>% pull(proba)
+
+overall_ttest <- t.test(female_proba, male_proba)
+print("Overall t-test between Female and Male:")
+print(overall_ttest)
+
+# Difference between Female and Male for true = 1
+female_proba_true1 <- pred_val %>% filter(SEX == "Female", true == 1) %>% pull(proba)
+male_proba_true1 <- pred_val %>% filter(SEX == "Male", true == 1) %>% pull(proba)
+
+true1_ttest <- t.test(female_proba_true1, male_proba_true1)
+print("t-test between Female and Male for true = 1:")
+print(true1_ttest)
+
+# Difference between Female and Male for true = 0
+female_proba_true0 <- pred_val %>% filter(SEX == "Female", true == 0) %>% pull(proba)
+male_proba_true0 <- pred_val %>% filter(SEX == "Male", true == 0) %>% pull(proba)
+
+true0_ttest <- t.test(female_proba_true0, male_proba_true0)
+print("t-test between Female and Male for true = 0:")
+print(true0_ttest)
+```
+
+#### Table preparations
+```{r}
+table1_order <- c(
+  "y_pred", "AGE", "SEX", "Ethnicity",  "BMI", "Waist circumference", 
+  "Weight", "Standing height",
+  "MultipleDeprivationIndex", "Bloodpressure_sys", "Medication", "DM",
+  "Family_diabetes", "Pack years", "Alk_g_d", "Liver cirrhosis" # Continue as necessary
+)
+
+
+label_list <- list(
+  AGE = "Age [years]",
+  location_name = "Location",
+  location_country = "Country",
+  Family_diabetes = "Family Diabetes",
+  DM = "Diabetes mellitus",
+  Alk_g_d = "Alcohol [g/d]",
+  High_Alk = "High Alcohol Consumption",
+  Path_Alk = "Pathological Alcohol Consumption",
+  BMI_cat = "BMI Categories",
+  Bloodpressure_sys = "Bloodpressure sys. [mmHg]",
+  Weight = "Weight [kg]",
+  'Standing height' = "Standing height [cm]",
+  'Waist circumference' = "Waist circumference [cm]",
+  y_pred = "Prediction Score",
+  Alk_g_d = "Alcohol [g/d]"
+)
+
+head_only = FALSE
+
+#dataframes <- list(df_covariates = df_covariates, df_blood = df_blood)
+dataframes <- list(df_covariates = df_covariates)
+dataframes <- list(df_blood = df_blood)
+
+biobank_key <- "UKB"
+```
+
+
+#### Create tables for interesting combinations
+```{r}
+# pred_val_pos <- pred_val %>%
+#   filter(true == 1) %>%
+#   mutate(status = if_else(TP == 1, "TP", "FN"))
+# 
+# 
+# pred_val_neg <- pred_val %>%
+#   filter(true == 0) %>%
+#   mutate(status = if_else(TN == 1, "TN", "FP"))
+
+# 
+# #TP vs FN
+# 
+# for (df_name in names(dataframes)) {
+#   df <- dataframes[[df_name]]
+#   df_temp <- inner_join(pred_val_pos, df, by = "eid") 
+#   table_name <- paste0("Positive Cases Characteristics - ", low_threshold, df_name)
+#   
+#   if (df_name == "df_covariates") {
+#     order = table1_order
+#   } else {                   # If this is not df_covariates, we still need the SEX column
+#     order = FALSE
+#     df_temp <- inner_join(df_temp, df_covariates %>% select(eid, SEX), by = "eid")
+#   }
+#   df_temp <- df_temp %>% select(-c("eid"))
+#   create_table(df_temp, table_name = table_name, export_RDS = FALSE, head_only=head_only, remove_SEX=FALSE, enforced_order=order)
+# }
+# 
+# for (df_name in names(dataframes)) {
+#   df <- dataframes[[df_name]]
+#   df_temp <- inner_join(pred_val_pos, df, by = "eid")
+#   
+#   if (df_name == "df_covariates") {
+#     order = table1_order
+#   } else {
+#     # If this is not df_covariates, we still need the SEX column
+#     order = FALSE
+#     df_temp <- inner_join(df_temp, df_covariates %>% select(eid, SEX), by = "eid")
+#   }
+#   df_temp <- df_temp %>% select(-c("eid"))
+#   
+#   table_name <- paste0("Positive Cases Characteristics - ", low_threshold, df_name)
+#   split_create_merge_tables(df_temp, table_name=table_name, feature="SEX", enforced_order=order, remove_SEX=TRUE, export_RDS=TRUE)
+#   Table_1_stratified <- import_merge_tables(table_name= table_name, feature="SEX", levels = c("Female", "Male"))
+# }
+# 
+# 
+# #FP vs TN
+# 
+# for (df_name in names(dataframes)) {
+#   df <- dataframes[[df_name]]
+#   df_temp <- inner_join(pred_val_neg, df, by = "eid") 
+#   if (df_name == "df_covariates") {
+#     order = table1_order
+#   } else {                   # If this is not df_covariates, we still need the SEX column
+#     order = FALSE
+#     df_temp <- inner_join(df_temp, df_covariates %>% select(eid, SEX), by = "eid")
+#   }
+#   table_name <- paste0("Negative Cases Characteristics - ", low_threshold, df_name)
+#   create_table(df_temp, table_name = table_name, export_RDS = FALSE, head_only=head_only, remove_SEX=FALSE, enforced_order=order)
+# }
+# 
+# for (df_name in names(dataframes)) {
+#   df <- dataframes[[df_name]]
+#   df_temp <- inner_join(pred_val_neg, df, by = "eid") 
+#   if (df_name == "df_covariates") {
+#     order = table1_order
+#   } else {                   # If this is not df_covariates, we still need the SEX column
+#     order = FALSE
+#     df_temp <- inner_join(df_temp, df_covariates %>% select(eid, SEX), by = "eid")
+#   }
+#   table_name <- paste0("Negative Cases Characteristics - ", low_threshold, df_name)
+#   split_create_merge_tables(df_temp, table_name=table_name, feature="SEX", enforced_order=order, remove_SEX=TRUE, export_RDS=TRUE)
+#   Table_1_stratified <- import_merge_tables(table_name= table_name, feature="SEX", levels = c("Female", "Male"))
+# }
+```
+
+
+
+```{r}
+table(pred_val_2$Ethnicity)
+class(pred_val_2$Ethnicity)
+unique(pred_val_2$Ethnicity)
+head(pred_val_2$Ethnicity)
+str(pred_val_2$Ethnicity)
+```
+
+
+```{r}
+pred_val_2 <- pred_val %>%
+  mutate(status = case_when(
+      TP == 1 ~ "TP",
+      TN == 1 ~ "TN",
+      FP == 1 ~ "FP",
+      FN == 1 ~ "FN",
+      TRUE ~ NA_character_
+    )
+  )
+
+pred_val_2$eid <- as.integer(pred_val_2$eid)
+pred_val_2 <- inner_join(pred_val_2, df_diagnosis[, c("eid", "Liver cirrhosis", "DM")], by= "eid")
+
+
+# Convert to integer while preserving 0 and 1 (in integer, boolean categories will only display the item for the TRUE class, not for both)
+pred_val_2$`Liver cirrhosis` <- as.integer(pred_val_2$`Liver cirrhosis` == "1")  # This will make TRUE = 1, FALSE = 0
+pred_val_2$DM <- as.integer(pred_val_2$DM == "1")
+pred_val_2$Family_diabetes <- as.integer(pred_val_2$Family_diabetes == "1")
+
+# Verify the conversion shows only 0s and 1s
+print("Values after conversion:")
+print(table(pred_val_2$`Liver cirrhosis`, useNA = "always"))
+print(table(pred_val_2$DM, useNA = "always"))
+print(table(pred_val_2$Family_diabetes, useNA = "always"))
+
+
+
+pred_val_2$Medication <- factor(pred_val_2$Medication, 
+                               levels = c("Hormones", "Metabolic", "No Medication"))
+
+table_name = paste0("All TP TN Options_threshold_", low_threshold)
+create_table(pred_val_2, table_name = table_name, export_RDS = TRUE, head_only=head_only, remove_SEX=FALSE, enforced_order=table1_order, column_order = c("FN", "TP", "FP", "TN"), )
+
+```
+
+```{r}
+print("Structure of Liver cirrhosis:")
+print(str(pred_val_2$`Liver cirrhosis`))
+print(table(pred_val_2$`Liver cirrhosis`, useNA = "always"))
+
+print("Structure of DM:")
+print(str(pred_val_2$DM))
+print(table(pred_val_2$DM, useNA = "always"))
+
+print("Structure of Family_diabetes:")
+print(str(pred_val_2$Family_diabetes))
+print(table(pred_val_2$Family_diabetes, useNA = "always"))
+```
+
+
+```{r}
+#packageVersion("gtsummary")
+#packageVersion("gt")
+packageVersion("rlang")
+```
+
+```{r}
+#install.packages("gtsummary", version = "2.0.3")
+#install.packages("gt", version = "0.11.1")
+#install.packages("glue", version = "1.8.0")
+install.packages("rlang")
+```
+
+
+

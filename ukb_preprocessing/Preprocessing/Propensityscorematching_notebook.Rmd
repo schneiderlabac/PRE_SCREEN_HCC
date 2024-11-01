@@ -1,0 +1,106 @@
+```{r}
+library(MatchIt)
+library(dplyr)
+library(ggplot2)
+library(stats)
+library(base)
+library(broom)
+library(tidyr)
+library(readr)
+library(dplyr)
+library(gtools)
+library(data.table)
+options(java.parameters = "-Xmx8000m")
+library(rJava)
+library(xlsx)
+library(readxl)
+if (!requireNamespace("MatchIt", quietly = TRUE)) {
+  install.packages("MatchIt")
+}
+if (!requireNamespace("dplyr", quietly = TRUE)) {
+  install.packages("dplyr")
+}
+
+library(MatchIt)
+library(dplyr)
+source("../config.R") #Loads libraries, variables and global function
+```
+
+
+#### Load required Dataframes
+
+```{r}
+setwd(sharepoint_ukb)
+proteomics_eids <- read.csv("C:/Users/felix/OneDrive - Uniklinik RWTH Aachen/public/ukb/extracted/df_proteomics_eids.csv")
+cols_to_read <- c("eid")
+#proteomics_eids <- fread("raw/olink_data_full.txt", select = cols_to_read) %>% #check_and_remove_withdrawals(df_withdrawals)
+# proteomics_eids <- proteomics_eids %>% filter(!duplicated(eid))
+# write.csv(proteomics_eids, file = "C:/Users/felix/OneDrive - Uniklinik RWTH Aachen/public/ukb/extracted/df_proteomics_eids.csv", col.names=TRUE, row.names=TRUE, append=FALSE)
+setwd(project_path)
+load("data/dataframes/df_covariates.RData")
+load("data/dataframes/df_y.RData")
+
+```
+
+
+#### Build Propensity Score Dataframe with your wanted covariates and Status variable
+```{r}
+df_psm <- df_covariates %>% select(c(eid, AGE, SEX, BMI, MultipleDeprivationIndex))
+df_status <- df_y %>% select(c("eid", "status"))
+df_psm <- merge(df_psm, df_status, by = "eid")
+#df_psm <- merge(proteomics_eids, df_psm, by="eid")
+df_psm <- df_psm %>% mutate(SEX = ifelse(SEX == "Male", 1, ifelse(SEX == "Female", 0, NA)))
+sum(df_psm$status)
+df_psm <- na.omit(df_psm) #only works with no NANs in your df
+```
+
+
+#### Matching your cases, you can adjust the ratio and your covariates that you want to include   #### here
+```{r}
+
+propensity_model <- glm(status ~ AGE + SEX + BMI + MultipleDeprivationIndex, data = df_psm, family = binomial())
+df_psm$propensity_score <- predict(propensity_model, type = "response")
+
+
+cca_match<-matchit(status~  AGE + SEX + BMI+MultipleDeprivationIndex, data=df_psm, method="nearest", ratio=2, caliper=0.2)
+cca_match10<-matchit(status~  AGE + SEX + BMI+MultipleDeprivationIndex, data=df_psm, method="nearest", ratio=10, caliper=0.2)
+cca_match20<-matchit(status~  AGE + SEX + BMI+MultipleDeprivationIndex, data=df_psm, method="nearest", ratio=20, caliper=0.2)
+
+cca_gematchedAgeSexBMIMDI <- match.data(cca_match)
+cca_gematched10AgeSexBMIMDI <- match.data(cca_match10)
+cca_gematched20AgeSexBMIMDI <- match.data(cca_match20)
+```
+
+
+#### Check your Dataframe and save it as a csv for further analyses
+
+```{r}
+df_psm
+```
+
+```{r}
+write.csv(cca_gematched10AgeSexBMIMDI, file="C:/Users/felix/OneDrive - Uniklinik RWTH Aachen/public/projects/cca/data/dataframes/df_psm_cca10.csv", col.names=TRUE, row.names=TRUE, append=FALSE)
+
+
+
+##### Select only EID and Status column for the use of Niharikas Tool
+
+cca_niharika_matched <- cca_gematched10AgeSexBMIMDI %>% select(c("eid", "status"))
+
+cca_niharika_matched$status<- as.integer(cca_niharika_matched$status)
+typeof(cca_niharika_matched$status)
+
+write.csv(cca_niharika_matched, file="C:/Users/felix/OneDrive - Uniklinik RWTH Aachen/public/projects/cca/data/dataframes/df_psm_cca10_niharika.csv", col.names=TRUE, row.names=TRUE, append=FALSE)
+
+
+
+splenomegaly <-read.csv("C:/Users/felix/OneDrive - Uniklinik RWTH Aachen/Niharika Tool Proteomics/volcano_plot_generator/labels/Splenomegaly.csv")
+typeof(splenomegaly$)
+```
+
+
+
+# Eigentliches Matching (change ratio for amount of matches for each HCC)
+HCC_match20<-matchit(HCC~  AGE + SEX + BMI, data=Pat_with_metabolomics, method="nearest", ratio=20, caliper=0.2)
+HCC_gematched20AgeSexBMI <- match.data(HCC_match20)
+
