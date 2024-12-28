@@ -299,7 +299,7 @@ class Pipeline:
 
     def evaluation(self, only_val=False):
         self.eval = train_test.eval(self, only_val=only_val)
-        self.eval.get_pv_test_train(self, )
+        self.eval.get_pv_test_train(self)
 
     def roc_auc_test_train(self):
         fig, ax = plt.subplots(1, 3, figsize=(15, 8), sharey=False)
@@ -400,12 +400,15 @@ class Pipeline:
 
         # Save to Excel, updating existing file if it exists
         if output_path is None:
-            output_path = os.path.join(self.user_input.model_path, 'Pipelines', self.model_type, 'combined_output', 'val', 'all_evaluation_results.xlsx')
+            output_path = os.path.join('combined_output', 'val', 'all_evaluation_results.xlsx')
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        # Read existing Excel file if it exists
-        if os.path.exists(output_path):
+        # Check if file exists
+        file_exists = os.path.exists(output_path)
+
+        if file_exists:
+            # Read existing data if file exists
             with pd.ExcelFile(output_path) as xls:
                 if 'Independent metrics' in xls.sheet_names:
                     existing_data = pd.read_excel(xls, 'Independent metrics')
@@ -416,9 +419,13 @@ class Pipeline:
                     ]
                     evaluation_results = pd.concat([existing_data, evaluation_results], ignore_index=True)
 
-        # Write to Excel
-        with pd.ExcelWriter(output_path, mode='a' if os.path.exists(output_path) else 'w', if_sheet_exists="replace") as writer:
-            evaluation_results.to_excel(writer, sheet_name='Independent metrics', index=False)
+            # Append to existing file
+            with pd.ExcelWriter(output_path, mode='a', if_sheet_exists="replace") as writer:
+                evaluation_results.to_excel(writer, sheet_name='Independent metrics', index=False)
+        else:
+            # Create new file
+            with pd.ExcelWriter(output_path, mode='w') as writer:
+                evaluation_results.to_excel(writer, sheet_name='Independent metrics', index=False)
 
         print(f"Threshold-independent evaluation results saved to: {output_path}")
         return evaluation_results
@@ -459,7 +466,7 @@ class Pipeline:
         threshold_evaluation_results = pd.DataFrame()
 
         proba = self.master_RFC.predict_proba(self.ohe.transform(self.data.X_val))
-        y_true = self.data.z_val["status_cancerreg"]
+        y_true = self.data.y_val.values 
 
         for threshold in thresholds:
             if proba.ndim == 1:
@@ -523,12 +530,15 @@ class Pipeline:
 
         # Save to Excel, updating existing file if it exists
         if output_path is None:
-            output_path = os.path.join(self.user_input.model_path, 'Pipelines', self.model_type, 'combined_output', 'val', 'all_evaluation_results.xlsx')
+            output_path = os.path.join('combined_output', 'val', 'all_evaluation_results.xlsx')
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        # Read existing Excel file if it exists
-        if os.path.exists(output_path):
+        # Check if file exists
+        file_exists = os.path.exists(output_path)
+
+        if file_exists:
+            # Read existing data if file exists
             with pd.ExcelFile(output_path) as xls:
                 if 'Threshold metrics_all_thresholds' in xls.sheet_names:
                     existing_data = pd.read_excel(xls, 'Threshold metrics_all_thresholds')
@@ -539,20 +549,20 @@ class Pipeline:
                     ]
                     threshold_evaluation_results = pd.concat([existing_data, threshold_evaluation_results], ignore_index=True)
 
-        # Sort the results by Model, Dataset, and Threshold
-        threshold_evaluation_results = threshold_evaluation_results.sort_values(['Model', 'Dataset', 'Threshold'])
+            # Sort the results by Model, Dataset, and Threshold
+            threshold_evaluation_results = threshold_evaluation_results.sort_values(['Model', 'Dataset', 'Threshold'])
 
-        # Write to Excel
-        with pd.ExcelWriter(output_path, mode='a' if os.path.exists(output_path) else 'w', if_sheet_exists="replace") as writer:
-            threshold_evaluation_results.to_excel(writer, sheet_name='Threshold metrics_all_thresholds', index=False)
-
-        # Store results in the Pipeline object
-        if not hasattr(self, 'evaluation_results'):
-            self.evaluation_results = {}
-        self.evaluation_results['threshold_dependent'] = threshold_evaluation_results
+            # Append to existing file
+            with pd.ExcelWriter(output_path, mode='a', if_sheet_exists="replace") as writer:
+                threshold_evaluation_results.to_excel(writer, sheet_name='Threshold metrics_all_thresholds', index=False)
+        else:
+            # Create new file
+            with pd.ExcelWriter(output_path, mode='w') as writer:
+                threshold_evaluation_results.to_excel(writer, sheet_name='Threshold metrics_all_thresholds', index=False)
 
         print(f"Threshold-dependent evaluation results saved to: {output_path}")
         return threshold_evaluation_results
+
 
 
 
@@ -641,31 +651,6 @@ class Pipeline:
         model_save_to = path + self.name + ".joblib"
         dump(self, model_save_to)
         print("Pipeline saved to:\n", model_save_to)
-
-class export_ext_val:
-    def __init__(self,pl) -> None:
-        self.user_input=pl.user_input
-        self.master_RFC=pl.master_RFC
-        self.list_estimators=[i.best_estimator_ for i in pl.master_RFC.models]
-        self.name=pl.name
-        self.ohe=pl.ohe
-        self.mapper=pl.mapper
-        self.columngroups_df=pl.data.columngroups_df
-        self.pipeline_output_path='.'# setzt den export path auf das dir in dem wir uns befinden !!!! adjust if needed on external server to the folder you want
-        ## export the trained_model class partly:
-        for key, value_orig in pl.trained_model.model_with_info.items():
-            value_new = {"model": value_orig.get("model")}
-            value_orig.clear()
-            value_orig.update(value_new)
-        self.trained_model = pl.trained_model
-    def save_to(self,path:str ='.'):
-        save_dir = os.path.join(self.user_input.path, "Models", "Validation_Objects")
-        os.makedirs(save_dir, exist_ok=True)
-        file_path = os.path.join(save_dir, f"{self.name}_external_val.joblib")
-        dump(self, file_path)
-
-            # Print confirmation message
-        print(f"External validation object has been saved to: {os.path.abspath(file_path)}")
 
 
 def plot_KM(pl, thrsholds_limits: list = [0.4, 0.5], color_dict={"low": "green", "medium": "yellow", "high": "red"}):

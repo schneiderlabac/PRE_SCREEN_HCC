@@ -70,7 +70,6 @@ class trained_model:
             cv_outer, cv_inner = gcv, scv
             le = LabelEncoder()
             cv_out = cv_outer.split(X_train, y_train, groups=le.fit_transform(X_train[grouped_split_on]))
-
         elif self_pip.user_input.training["cross_validation_method"] == "stratified":
             scv = StratifiedKFold(
                 n_splits=self_pip.user_input.training["n_splits"],
@@ -80,7 +79,6 @@ class trained_model:
             cv_outer, cv_inner = scv, scv
             cv_out = cv_outer.split(X_train, y_train)
             le = LabelEncoder()
-
         # start outer loop:
         ## define cv object
         def run_inner_loop(iterator,train_idx, test_idx,estimator=estimator,models=models,model_with_info=model_with_info,self_pip=self_pip):
@@ -126,7 +124,6 @@ class trained_model:
                 }
             )
             return model_with_info, models
-
         results=Parallel(n_jobs=-1)(delayed(run_inner_loop)(iterator,train_idx,test_idx) for iterator,(train_idx, test_idx) in enumerate(cv_out))
         for (model_with_i, model) in  results:
             model_with_info.update(model_with_i)
@@ -401,7 +398,6 @@ class eval:
         export_test = pd.DataFrame()
         export_train = pd.DataFrame()
         export_val = None
-
         if not self.only_val:
             for key, val in pip_self.trained_model.model_with_info.items():
                 y_true_train, y_true_test = [], []

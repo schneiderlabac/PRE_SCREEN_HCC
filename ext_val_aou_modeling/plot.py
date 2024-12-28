@@ -159,10 +159,8 @@ def feature_imp_barplot(
     plot_X.rename(columns={"mean_feature_imp": "feature_imp"}, inplace=True)
     plot_X["source_lit"] = plot_X.source.map(df_source_map_rename)
     bar_height = 17 * (n_features / 60)  # Define height of the plot according to number of features
-    # Horizontal bar plot with feature importance for the top individual feature
+    # Horizontal bar plot with feature importance for the top individual features
     fig, ax = plt.subplots(figsize=(10, bar_height))  # previously 20
-    plt.xticks(np.arange(0, 0.14, step=0.02))
-    plt.xlim(0, 0.14)
 
     if is_master_model:
         sns.barplot(
@@ -172,7 +170,7 @@ def feature_imp_barplot(
             y="name_print",
             hue="source",
             errorbar=("ci", 95),
-            err_kws={'color': 'lightgray'} ,
+            errcolor="lightgray",
             # err_kws={'alpha':0.2}, # only in newer versions
             saturation=1,
             dodge=False,
@@ -211,7 +209,7 @@ def feature_imp_barplot(
             # palette=dict(zip(pd.Series(color_groups.keys()).map({df_source_map_rename}),list(color_groups.values()))),
             palette=color_dict,
             ax=axadded,
-            err_kws={'color': 'lightgray'} ,
+            errcolor="lightgray",
         )
         axadded.bar_label(
             ax.containers[0],  # type: ignore
@@ -225,7 +223,7 @@ def feature_imp_barplot(
         )
 
         svg_path = os.path.join(fig_path, f"Feature Imp_{col_subset}_{row_subset}_{n_features}.svg")
-        fig.savefig(svg_path, format="svg", bbox_inches="tight", transparent=True)
+        fig.savefig(svg_path, format="svg", bbox_inches="tight")
 
     return fig, ax, plot_X
 
@@ -654,7 +652,8 @@ def wrapper_eval_prediction_multi(
 
 def create_violin_plot(
     pip_self,
-    data,
+    X_val,
+    y_val,
     model,
     ohe,
     thresholds_choice,
@@ -665,18 +664,12 @@ def create_violin_plot(
     palette=None,
     ax=None,
     split=True,
-    y_pred=None,
-    truth="status",
-    save_fig=True,
 ):
     DOI = pip_self.user_input.DOI
     row_subset_long = pip_self.user_input.row_subset_long
     col_subset = pip_self.user_input.col_subset
     row_subset = pip_self.user_input.row_subset
-    try:
-        estimator = pip_self.model_type
-    except:
-        estimator = "undefined model type"
+    estimator = pip_self.model_type
     fig_path = pip_self.user_input.fig_path
     title = f"{col_subset} {row_subset} {estimator}"
 
@@ -685,13 +678,11 @@ def create_violin_plot(
             0: adjust_alpha(pip_self.mapper.color_groups_violin[pip_self.user_input.col_subset], 0.5),
             1: adjust_alpha(pip_self.mapper.color_groups_violin[pip_self.user_input.col_subset], 1),
         }
-    if y_pred is None:
-        pred_probs = model.predict_proba(ohe.transform(X_val))
-    else:
-        pred_probs = y_pred
+
+    pred_probs = model.predict_proba(ohe.transform(X_val))
 
     df = pd.DataFrame()
-    df["status"] = y_val[truth]
+    df["status"] = y_val.status
     if type(pred_probs) != np.ndarray:
         df["proba"] = pred_probs.values
     else:
@@ -707,13 +698,13 @@ def create_violin_plot(
         data=df,
         y="proba",
         x="status",
-        split=split,
+        split=True,
         inner="quart",
         gap=gap,
         width=width,
-        dodge='auto',
+        dodge="auto",
         palette=palette,
-        hue=truth,
+        hue="status",
         linecolor="white",
         linewidth=2,
         saturation=1,
@@ -748,9 +739,7 @@ def create_violin_plot(
     plt.title(title, pad=20, fontsize=26)
 
     svg_path = os.path.join(fig_path, f"Violin_{col_subset}_{row_subset}.svg")
-    if save_fig:
-        fig.savefig(svg_path, format="svg", bbox_inches="tight")
-    
+    fig.savefig(svg_path, format="svg", bbox_inches="tight")
     return fig, ax
 
 
