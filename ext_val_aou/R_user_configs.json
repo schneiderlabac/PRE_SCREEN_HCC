@@ -1,0 +1,9 @@
+{
+  "_comment": "This is a configuration file for user-specific settings. Each key represents a unique user ID with corresponding configurations. Note: JSON syntax requires double quotes for strings and does not support single quotes or comments (// or #) like other programming languages. Arrays are denoted with square brackets [], and objects (key-value pairs) with curly braces {}.",
+  "default": {
+    "project_key": "hcc",
+    "biobank_key": "ukb",
+    "ukb_scripts": "/home/default/ukb_scripts",
+    "master_table": "data/Master_Table_Default.xlsx",
+    "na_mode": "impute"
+  }
