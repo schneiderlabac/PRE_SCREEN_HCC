@@ -3,13 +3,67 @@ title: "Table Y"
 output: html_notebook
 ---
 
+# This small paragraph loads virtually all different libraries relevant for UKB R Preprocessing, loads paths to most common UKB datasets and links to a couple of JSON files such as project_configs.JSON and user_configs. If you have adapted the JSON files to represent your computer username, then all variables should be automatically set to your preferred project settings and userpaths.
 ```{r}
 source("../config.R") #Loads libraries, variables and global function
 ```
 
-#### Load hesin data (NHS Information on hospital admissions, diagnosis etc)
+# Load hesin data (NHS Information on hospital admissions, diagnosis etc)
+## UK Biobank: Overview of `hesin` and `hesin_diag` Tables
+
+The `hesin` and `hesin_diag` tables in the UK Biobank dataset contain **hospital episode statistics (HES)**, capturing **inpatient hospital admissions** and **diagnostic codes** for participants. These tables are crucial for understanding the medical history of individuals, particularly for longitudinal studies.
+
+## `hesin` Table: Hospital Episode Information
+
+The `hesin` table contains **administrative details of hospital admissions**, including admission and discharge dates, treatment providers, and financial details. It helps track **when and where** patients were hospitalized and provides metadata on hospital stays.
+
+### Key Columns:
+| Column Name  | Description |
+|-------------|------------|
+| `eid`       | Unique participant ID |
+| `ins_index` | Episode index (links to `hesin_diag`) |
+| `epistart`  | Start date of hospital episode |
+| `epiend`    | End date of hospital episode |
+| `source`    | Data source (e.g., NHS) |
+| `elecdate`  | Date of admission (elective cases) |
+| `disdate`   | Date of discharge |
+| `spell_index` | Index for hospitalization spell (multiple episodes per stay) |
+| `tretspef`  | Treatment specialty code |
+| `admidate`  | Admission date of the hospital spell |
+| `disdest`   | Destination after discharge (e.g., home, another hospital) |
+
+## `hesin_diag` Table: Diagnosis Codes
+
+The `hesin_diag` table records **all diagnoses made during hospital episodes**. Each episode (`ins_index`) can have **multiple diagnoses**, coded using **ICD-10 or ICD-9** classifications. This table is essential for **identifying diseases** diagnosed during hospitalization.
+
+### Key Columns:
+| Column Name  | Description |
+|-------------|------------|
+| `eid`       | Unique participant ID (links to `hesin`) |
+| `ins_index` | Episode index (links to `hesin`) |
+| `diag_icd10` | Primary ICD-10 diagnosis code |
+| `diag_icd9` | Primary ICD-9 diagnosis code (if applicable) |
+| `level`     | Indicates whether the diagnosis is primary (level 1) or secondary |
+
+## Relationship Between `hesin` and `hesin_diag`
+- **`hesin` provides the "when and where"** of hospital episodes (admissions, discharges).
+- **`hesin_diag` provides the "what"** (diagnoses made during the hospital stay).
+- They are linked via **`eid` (participant ID) and `ins_index` (hospital episode index)**.
+
+By merging these tables, researchers can:
+- Track **disease trajectories** (e.g., progression from cirrhosis to HCC).
+- Analyze **hospitalization patterns** and outcomes.
+- Identify **risk factors for hospital-based diagnoses**.
+
+## Practical Considerations
+- **ICD coding changes over time**: Some conditions may be coded differently across years.
+- **Multiple diagnoses per episode**: Secondary diagnoses may provide additional context.
+- **Some episodes may lack diagnosis codes**: Be mindful of missing data.
+
+By leveraging `hesin` and `hesin_diag`, we can extract valuable **real-world clinical insights** from the UK Biobank population.
+
 ```{r}
-#lade die Datensets mit Diagnosen der Patienten (more info here: https://biobank.ndph.ox.ac.uk/showcase/refer.cgi?id=141140 )
+#load hesin and hesin_diag and remove patients who have withdrawn consent (more info here: https://biobank.ndph.ox.ac.uk/showcase/refer.cgi?id=141140 )
 setwd(sharepoint_ukb)
 df_withdrawals <- read.delim(withdrawals_path)
 cols_to_read <- c("eid", "ins_index", "diag_icd10", "diag_icd9") #predefine cols for hesin/hesin_diag to be read
@@ -33,7 +87,7 @@ death_date <- read.delim(death_date_path) %>%
 death_info <- merge(death_cause, death_date, by="eid") %>% # Merge the data frames
   check_and_remove_withdrawals(df_withdrawals)
 rm(hesin, hesin_diag, death_cause, death_date) #Clean up tables no longer in use
-sub_icd <- subset(pat_icds, diag_icd10 %in% IOIs)
+sub_icd <- subset(pat_icds, diag_icd10 %in% IOIs) #(Diagnosis of interest) IOI = ICD code of interest
 
 #Export sub_icd if running through this multiple times because the part above takes quite some time due to large dfs
 setwd(sharepoint_ukb)
@@ -42,7 +96,10 @@ filename <- paste("processed/sub_icd_" ,DOI, ".csv")
 ```
 
 
-#### Define function subset_hesin to Extract information on DOI, add data on "died from DOI" to "was diagnosed with DOI"
+
+
+# Define function subset_hesin to Extract information on DOI (Diagnosis of interest), add data on "died from DOI" to "was diagnosed with DOI"
+## This is done in a loop to allow extraction for multiple IOIs (ICD codes of interest) at once. 
 ```{r}
 
 summary_df <- data.frame(icd_code = character(), amount = numeric())
@@ -115,14 +172,38 @@ count_eid_duplications(sub, df_name= "Subset of Patients with DOI")
 
 ```
 
-#### Access all eids as well as info on assessment center + date of first visit
+# Optional: Complement sub dataframe with more info from hesin and hesin_diag plus hesin_oper (operational procedures)
+
+```{r}
+eid_list <- sub$eid  # Extract unique eids from the subset
+
+# Import only the matching rows from hesin and hesin_diag
+setwd(sharepoint_ukb)
+hesin_DOI <- fread(hesin_path)[eid %in% eid_list]
+hesin_diag_DOI <- fread(hesin_diag_path)[eid %in% eid_list]
+hesin_oper_DOI <- fread(hesin_oper_path)[eid %in% eid_list]
+
+
+# Merge the two datasets based on eid and ins_index
+pat_icds_DOI <- merge(hesin_diag_DOI, hesin_DOI, by = c("eid", "ins_index"), all = TRUE) 
+pat_icds_DOI <- merge(pat_icds_DOI, hesin_oper_DOI, by = c("eid", "ins_index", "level"))
+
+#Example: Filter by oper_codes, which are defined project-specific in project_configs
+biopsy_patients <- hesin_oper_DOI[oper4 %in% oper_codes, unique(eid)]
+
+```
+
+
+
+
+# Access all eids as well as info on assessment center + date of first visit
 ```{r}
 #Access all UKB_eids either from sharepoint
   #setwd(sharepoint_ukb)
   #df <- fread("raw/ukb52200.csv", select=c("eid", "52-0.0", "34-0.0" "53-0.0", "54-0.0"))   
   #write.csv(df, file="extracted/basic_info.csv", row.names=FALSE)   
   
-#shortcut
+# or from previously extracted data (shortcut)
 setwd(sharepoint_ukb)
 df_basic <- fread("extracted/basic_info.csv") %>% check_and_remove_withdrawals(df_withdrawals)
 
@@ -154,24 +235,22 @@ try({
   df_discard <- merge(df_basic, sub, by.x = "eid", by.y = "eid", all.x=TRUE)
   sapply(df_discard, class)
   
-# Label all w/o DOI as 0, those with DOI 1 year after first visit as 1, rest as 2 (these will have to be removed, also in df_X)
+# Label all w/o DOI as 0, those with DOI > 1 year after first visit as 1, rest (DOI happened directly after UKB visit) as 2 (these will have to be removed for modelling as we want prospective predictions)
   # Replace NA's with 0 in 'status'
 df_discard$status[is.na(df_discard$status)] <- 0
 
 #Create a column that calculates the difference in time between assessment and diagnosis date (all cases with positive difftime (or negative but > -1 have to be discarded))
 df_discard <- df_discard %>%
-  mutate(difftime = ifelse(status == 1, difftime(assessment, date_of_diag, units = "weeks") / 52.25, NA))
-
-#label 2 for all DOI diagnosis previous to UKB assessment
-df_discard <- df_discard %>%
+  mutate(difftime = ifelse(status == 1, difftime(assessment, date_of_diag, units = "weeks") / 52.25, NA)) %>%
   mutate(status = case_when(
-    status == 1 & (difftime > 0 | (difftime >= -1 & difftime < 0)) ~ 2, TRUE ~ status),
+    status == 1 & (difftime > 0 | (difftime >= -1 & difftime < 0)) ~ 2, TRUE ~ status), #label 2 for all DOI diagnosis previous to UKB assessment
   discard = ifelse(status == 2, 1, 0))
+
 df_discard <- df_discard%>% distinct(eid, .keep_all = TRUE)
 #save(df_discard, file=paste(project_path, "/data/dataframes/df_discard.RData", sep=''))
 ```
 
-#### Prepare df_y
+# Prepare df_y
 ```{r}
 setwd(project_path)
 if (!exists("df_discard")) load("data/dataframes/df_discard.RData") #loads df_discard from project directory (to skip parts above)
@@ -192,7 +271,7 @@ mean_difftime <- round((mean(df_y$difftime[df_y$status == 1], na.rm = TRUE) * -1
 print(paste("Average time from assessment to", DOI, ":", mean_difftime, "years"))
 
 ```
-#### Visual AGE of HCC Patients
+# Visual AGE of HCC Patients
 
 ```{r}
 plot_hcc_diagnosis_age <- function(df, n_total, base_size = 18) {
@@ -273,7 +352,7 @@ plot_hcc_diagnosis_age(df_age_hcc, n_total=n_total, base_size = 30)
 
 
 
-#### Visualize time of HCC diagnosis and whether patient included in model or not
+# Visualize time of HCC diagnosis and whether patient included in model or not
 
 ```{r}
 
@@ -286,7 +365,7 @@ plot_included_discarded_cases(df_discard, base_size=27)
 
 
 
-#### Preprocess locations
+# Preprocess locations to prepare the splitting into train (England) and test (Scotland and Wales)
 ```{r}
 # Load the 'world.cities' data
 data("world.cities")
@@ -440,7 +519,7 @@ ggsave(filename = file.path(supplement_visuals_dir, paste0("barplot_", DOI, "_oc
 
 
 
-### Check cancer registry for overlap with ICD10 coded diagnosis
+# Check cancer registry for overlap with ICD10 coded diagnosis
 
 ```{r}
 setwd(sharepoint_ukb)
@@ -499,7 +578,7 @@ df_y <- inner_join(df_y, df_y_cancerreg, by = "eid")
 
 
 
-#### Export all
+# Export all
 ```{r}
 setwd(project_path)
 
@@ -531,14 +610,14 @@ write.xlsx(summary_df, file=paste0(project_path, "/supplement/", DOI ,"_per_cent
 
 
 
+## _____
 
 
 
 
 
 
-
-
+# Graveyard
 
 
 

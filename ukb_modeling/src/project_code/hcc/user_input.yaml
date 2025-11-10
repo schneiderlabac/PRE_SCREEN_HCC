@@ -1,0 +1,157 @@
+### Define your project and the preprocessing run you want to use:
+export_date_data: "09_09_2024" #Reflects to the folder name where your data is stored in #For publication use "09_09_2024", for sensitivity analysis 16_10_2025
+DOI: "HCC"
+project: "hcc"
+
+# Define the cohort you want to use:
+row_subset: "all"  # "par" or "all" or "par_Cirrhosis"
+col_subset: "Model_TOP15" # Change this line to select another model combination
+test_cohort: "val" # applying model to either "test" or "val" data
+visual_export: true # Decide whether you just want to play around or export your visuals
+run_conf_matrices: true
+run_violin_plot: true
+run_feature_imp: true
+RUN_MODELS: true  # True or False, set on False if just evaluating
+add_benchmark: false
+target: "status" # status, status_cancerreg or whatever you want to call the relevant column
+target_to_validate_on: "status_cancerreg" # status, status_cancerreg or whatever you want to call the relevant column
+method_scaling_remainders: "standard" # "no_scaling", "standard" or "minmax"
+time_of_readout: None # List of floating point numbers of years, or None to use all data -> only relevant if you call the time_dep_training_tube -> train on differnt time points:)
+use_raw: True # True or False, if you want to use the raw data or previously normalized data
+use_adjusted_ohe: False # True or False, if you want to use the adjusted package for the ohe, with the adjusted one you can exclude specific transformed columns from the analysis.
+pl_suffix: _demo_mcp #If none, no suffix is added, otherwise you can add a suffix to the pipeline name
+
+
+# Set up some color mappings for the visuals
+color_groups_all:
+  df_covariates: "#4995AD"
+  df_diagnosis: "#385579"
+  df_blood: "#C13617"
+  df_snp: "#F0903E"
+  df_metabolomics: "#F0C872"
+  TOP75: "#cb664b"
+  TOP30: "#ce907f"
+  TOP15: "#c7b8b4"
+  Model_A: "#4995AD"
+  Model_B: "#385579"
+  Model_C: "#C13617"
+  Model_D:  "#F0903E"
+  Model_E: "#F0C872"
+  Model_TOP75: "#cb664b"
+  Model_TOP30: "#ce907f"
+  Model_TOP15: "#c7b8b4"
+  Blood count\n& Serum: "#C13617"     #These are the colors for the feature importance plots
+  EHR: "#385579"
+  Demography\n& Lifestyle: "#4995AD"
+  Metabolomics: "#F0C872"
+  Genomics: "#F0903E"
+  Demographics: "#4995AD"
+  Diagnosis: "#385579"
+  Blood: "#C13617"
+  SNP: "#F0903E"
+  Metabolomics: "#F0C872"
+
+
+color_groups_violin:
+  Model_A: [0.28627450980392155, 0.5843137254901961, 0.6784313725490196]
+  Model_B: [0.2196078431372549, 0.3333333333333333, 0.4745098039215686]
+  Model_C: [0.7568627450980392, 0.21176470588235294, 0.09019607843137255]
+  Model_Csmall: [0.7568627450980392, 0.21176470588235294, 0.09019607843137255]
+  Model_AMAP-RFC: [0.7568627450980392, 0.21176470588235294, 0.09019607843137255]
+  Model_D: [0.9411764705882353, 0.5647058823529412, 0.24313725490196078]
+  Model_E: [0.9411764705882353, 0.7843137254901961, 0.4470588235294118]
+  Model_TOP75: [0.796078431372549, 0.4, 0.29411764705882354]
+  Model_TOP30: [0.807843137254902, 0.5647058823529412, 0.4980392156862745]
+  Model_TOP15: [0.7803921568627451, 0.7215686274509804, 0.7058823529411765]
+
+
+# The hyperparameter configuration is explicitly organized into three clearly separated sections for each model:
+#1. params_fixed  (Never change during hyperparameter search): these get passed to the model call itself
+# (via get_estimator function in pipeline.py, will be appended as arguments e.g. for "RFC": RandomForestClassifier
+# -> return models[label](**fixed_params)) (returns all fixed parameters)
+
+# 2. params_grid  (Are explicitly searched/tuned via grid search, if just one item, GridSearch is redundant)
+#3. params_pipeline (Define pipeline-level evaluation and validation hyperparameters)
+# These sections distinguish between parameters that:
+
+
+hyperparameters:
+  RFC:
+    params_fixed:
+      random_state: 42                      # Random state for reproducibility
+      class_weight: "balanced_subsample"               # Class weight for imbalanced data
+    params_grid:
+      max_depth: [3, 5]                   # Maximum depth of the tree #3, 5, 8
+      n_estimators: [50, 100]            # Number of trees in the forest  #50, 100, 250
+    params_pipeline:
+      cross_validation_method: "grouped"    # Cross-validation method, grouped or split, grouped is recommended as of TRIPOD
+      n_splits: 5                           # Number of splits for cross-validation (=folds)
+      n_jobs_indiv: {outer_n_jobs: 1, inner_n_jobs: -1}                      # Number of jobs to run in parallel, -1 means all processors, None -> Parallelization depends on the number of cores available
+      scoring_grid_search: "balanced_accuracy" # Scoring metric for grid search
+      verbose: 2
+
+  XGB:
+    params_fixed:
+      random_state: 42                      # Random state for reproducibility
+      learning_rate: 0.1
+    params_grid:
+      max_depth: [3, 5, 8]                   # Maximum depth of the tree
+      n_estimators: [100, 200, 500]            # Number of trees in the forest
+      learning_rate: [0.01, 0.05, 0.1]
+    params_pipeline:
+      cross_validation_method: "grouped"    # Cross-validation method, grouped or split, grouped is recommended as of TRIPOD
+      n_splits: 5                           # Number of splits for cross-validation (=folds)
+      n_jobs_indiv: {outer_n_jobs: 1, inner_n_jobs: -1}                      # Number of jobs to run in parallel, -1 means all processors, None -> Parallelization depends on the number of cores available
+      scoring_grid_search: "balanced_accuracy" # Scoring metric for grid search
+      verbose: 2
+
+  CatBoost:
+    params_fixed:
+      random_state: 42
+      verbose: 2
+    params_grid:
+      iterations: [200, 500]
+      depth: [3, 5]
+      learning_rate: [0.01, 0.1]
+    params_pipeline:
+      scoring_grid_search: "balanced_accuracy"
+      cross_validation_method: "grouped"
+      n_splits: 5
+      n_jobs_indiv: {outer_n_jobs: 1, inner_n_jobs: -1}                      # Number of jobs to run in parallel, -1 means all processors, None -> Parallelization depends on the number of cores available
+      verbose: 2
+
+  ExtraTrees:
+    params_fixed:
+      random_state: 42
+      class_weight: "balanced_subsample"
+    params_grid:
+      n_estimators: [100, 200, 500]
+      criterion: ["gini", "entropy"]
+      max_features: ["sqrt", "log2"]
+      max_depth: [None, 3, 5]
+    params_pipeline:
+      cross_validation_method: "grouped"
+      n_splits: 5
+      n_jobs_indiv: {outer_n_jobs: 1, inner_n_jobs: -1}                      # Number of jobs to run in parallel, -1 means all processors, None -> Parallelization depends on the number of cores available
+      scoring_grid_search: "balanced_accuracy"
+      verbose: 2
+
+  neuronMLP: # Multi-layer Perceptron
+    params_fixed:
+      random_state: 42
+    params_grid:
+      hidden_layer_sizes: [(100, 50, 20, 5), (100, 50, 10), (100, 50), (100, 20), (100, 10), (100)]
+      activation: ["relu"]
+      solver: ["adam"]
+      alpha: [0.0001]
+      early_stopping: [True]
+    params_pipeline:
+      cross_validation_method: "grouped"
+      n_splits: 5
+      n_jobs_indiv: {outer_n_jobs: 1, inner_n_jobs: -1}
+      scoring_grid_search: "balanced_accuracy"
+      verbose: 3
+
+
+
+

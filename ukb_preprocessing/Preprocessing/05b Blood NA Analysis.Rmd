@@ -1,0 +1,314 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+source("../config.R") #Loads libraries, variables and global function
+
+```
+
+
+# Loading Data:
+
+Importing and preprocessing of multimodal data
+
+| Nr  | Description      | Dataset         |        n |
+|-----|------------------|:----------------|---------:|
+| 1a  | Patient IDs      | df_eid          |   502411 |
+| 1b  | Covariates       | df_covariates   |  Varying |
+| 1c  | ICD Diagnosis    | df_diagnosis    |   442277 |
+| 2   | Blood parameters | df_blood        |   456855 |
+| 3   | Metabolomics     | df_metabolomics |   248286 |
+| 4   | Genomics         | df_snp          |   488149 |
+| 5   | Radiomics        | df_mri          | \~50.000 |
+
+#### 1. EID, ICD, Covariates, PAR(Importing tables previously processed)
+
+```{r}
+#setwd(drive)
+#df_eid <- fread("ukb52200.csv", select=c("eid")) %>%    #all eids in UKB
+#write.csv(df_eid, file="C:/Users/Jan/OneDrive/Dokumente/PostDoc/Patient_tables/UKB_Patients_eids.csv", row.names=FALSE)    
+
+#a) df_eid 
+setwd(sharepoint_ukb)
+df_withdrawals <- fread(withdrawals_path)
+df_eid <- fread("extracted/UKB_Patients_eids.csv") %>% check_and_remove_withdrawals(df_withdrawals)
+
+#b) Covariate data for all 502411 patients: df_covariates 502411
+#Importing df_covariates: Preprocessing performed in Script "Extract and process covariates"
+setwd(project_path)
+load("data/dataframes/df_covariates.RData")
+df_covariates <- check_and_remove_withdrawals(df_covariates, df_withdrawals)
+#df_cap_covariates <- read_excel(paste0(sharepoint_ukb, "/", master_table), sheet="Cap_covariates") 
+
+
+#c) Diagnosis data for selected  diagnosis (import diagnosis data for selected diagnosis in Script "Extract_multiple_Diagnosis"))
+setwd(project_path)
+load("data/dataframes/df_diagnosis.RData")
+df_diagnosis <- df_diagnosis %>% check_and_remove_withdrawals(df_withdrawals)
+#sanity(df_diagnosis)
+
+setwd(sharepoint_ukb)
+mapper <- read_excel(master_table, sheet="Mapper_Limits")
+
+```
+
+
+```{r}
+setwd(sharepoint_ukb)
+df_blood <- fread("extracted/UKB_Patients_blood.csv") %>% check_and_remove_withdrawals(df_withdrawals)
+
+df_y <- read.csv(paste(project_path, "/data/dataframes/df_y.csv", sep='')) %>% check_and_remove_withdrawals(df_withdrawals)
+
+# changing names to measured parameters
+Blood_Marker_Index <- read_excel(master_table, sheet="Blood count and biochemistry") %>%
+  mutate(datafield = paste0(datafield, '-0.0'))
+
+df_blood <- df_blood %>%
+  rename_with(function(x) {
+    matched <- match(x, Blood_Marker_Index$datafield)
+    ifelse(is.na(matched), x, Blood_Marker_Index$Description[matched])
+  })
+
+
+df_blood <- df_blood %>%
+  select(eid, all_of(Blood_Marker_Index$Description)) %>%# Order Blood columns 
+  inner_join(df_y, by="eid")
+
+
+```
+
+
+
+```{r}
+# ============================================================================
+# NA THRESHOLD ANALYSIS
+# ============================================================================
+
+# Create a table to store results
+na_threshold_results_ukb <- data.frame(
+  na_threshold = integer(),
+  total_rows = integer(),
+  positive_cases = integer(),
+  negative_cases = integer(),
+  prevalence = numeric()
+)
+
+# Loop through different NA thresholds
+for (na_threshold in 0:20) {
+  # Apply omit.NA function with current threshold
+  df_filtered <- omit.NA(df_blood, na_threshold)
+  
+  # Calculate metrics
+  total_rows <- nrow(df_filtered)
+  positive_cases <- sum(df_filtered$status == 1, na.rm = TRUE)
+  negative_cases <- sum(df_filtered$status == 0, na.rm = TRUE)
+  prevalence <- if(total_rows > 0) positive_cases / total_rows else 0
+  
+  # Store results
+  na_threshold_results_ukb <- rbind(
+    na_threshold_results,
+    data.frame(
+      na_threshold = na_threshold,
+      total_rows = total_rows,
+      positive_cases = positive_cases,
+      negative_cases = negative_cases,
+      prevalence = prevalence
+    )
+  )
+  
+  # Print progress
+  cat(sprintf("NA threshold %2d: %7d total rows, %4d positive cases (%.2f%%)\n", 
+              na_threshold, total_rows, positive_cases, prevalence * 100))
+}
+
+# Save results to CSV
+write.csv(na_threshold_results_ukb, 
+          file.path(project_path, "tables/NA_threshold_analysis_ukb.csv"),
+          row.names = FALSE)
+
+# Print summary table
+print(na_threshold_results_ukb)
+
+# ============================================================================
+# PLOTTING
+# ============================================================================
+
+# Create dual-axis plot
+plot <- ggplot(na_threshold_results_ukb, aes(x = na_threshold)) +
+  # Total rows (left axis)
+  geom_line(aes(y = total_rows, color = "Total Rows"), 
+            linewidth = 1.2) +
+  geom_point(aes(y = total_rows, color = "Total Rows"), 
+             size = 3) +
+  geom_text(aes(y = total_rows, label = scales::comma(total_rows)),
+            vjust = -0.8, size = 3.5, color = "#2E86AB") +
+  
+  # Positive cases (right axis) - scale to match left axis range
+  geom_line(aes(y = positive_cases * max(total_rows) / max(positive_cases), 
+                color = "Positive Cases"), 
+            linewidth = 1.2) +
+  geom_point(aes(y = positive_cases * max(total_rows) / max(positive_cases), 
+                 color = "Positive Cases"), 
+             size = 3) +
+  geom_text(aes(y = positive_cases * max(total_rows) / max(positive_cases), 
+                label = positive_cases),
+            vjust = -0.8, size = 3.5, color = "#A23B72") +
+  
+  # Scales
+  scale_y_continuous(
+    name = "Total Rows",
+    labels = scales::comma,
+    limits = c(0, max(na_threshold_results$total_rows) * 1.1),
+    sec.axis = sec_axis(
+      ~ . * max(na_threshold_results$positive_cases) / max(na_threshold_results$total_rows),
+      name = "Positive Cases",
+      labels = scales::comma
+    )
+  ) +
+  scale_x_continuous(
+    name = "NA Threshold",
+    breaks = seq(0, 20, by = 5)
+  ) +
+  scale_color_manual(
+    name = "Metric",
+    values = c("Total Rows" = "#2E86AB", "Positive Cases" = "#A23B72")
+  ) +
+  
+  # Theme
+  labs(
+    title = "NA Threshold vs Dataset Size - UK Biobank",
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0),
+    plot.subtitle = element_text(size = 12, hjust = 0, color = "gray40"),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    axis.title.y.left = element_text(color = "#2E86AB", face = "bold"),
+    axis.title.y.right = element_text(color = "#A23B72", face = "bold"),
+    axis.text.y.left = element_text(color = "#2E86AB"),
+    axis.text.y.right = element_text(color = "#A23B72"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "gray90")
+  )
+
+# Save plot
+ggsave(
+  filename = file.path(project_path, "visuals/NA_threshold_impact_UKB.png"),
+  plot = plot,
+  width = 10,
+  height = 7,
+  dpi = 300
+)
+
+# Also save as PDF for publications
+ggsave(
+  filename = file.path(project_path, "visuals/NA_threshold_impact_UKB.svg"),
+  plot = plot,
+  width = 10,
+  height = 7
+)
+
+print(plot)
+```
+
+
+#AOU NA Data
+```{r}
+na_threshold_results_aou <- read_excel(file.path(project_path, "tables/NA_threshold_analysis_AOU.xlsx"))
+
+# Ensure correct column types
+na_threshold_results_aou <- na_threshold_results_aou %>%
+  mutate(
+    na_threshold = as.numeric(NA_Threshold),
+    total_rows = as.numeric(Total_Rows),
+    positive_cases = as.numeric(Positive_Cases)
+  )
+
+
+NA_Threshold	Total_Rows	Positive_Cases
+
+
+
+plot_aou <- ggplot(na_threshold_results_aou, aes(x = na_threshold)) +
+  # Total rows (left axis)
+  geom_line(aes(y = total_rows, color = "Total Rows"), 
+            linewidth = 1.2) +
+  geom_point(aes(y = total_rows, color = "Total Rows"), 
+             size = 3) +
+  geom_text(aes(y = total_rows, label = scales::comma(total_rows)),
+            vjust = -0.8, size = 3.5, color = "#2E86AB") +
+  
+  # Positive cases (right axis) - scale to match left axis range
+  geom_line(aes(y = positive_cases * max(total_rows) / max(positive_cases), 
+                color = "Positive Cases"), 
+            linewidth = 1.2) +
+  geom_point(aes(y = positive_cases * max(total_rows) / max(positive_cases), 
+                 color = "Positive Cases"), 
+             size = 3) +
+  geom_text(aes(y = positive_cases * max(total_rows) / max(positive_cases), 
+                label = positive_cases),
+            vjust = -0.8, size = 3.5, color = "#A23B72") +
+  
+  # Scales
+  scale_y_continuous(
+    name = "Total Rows",
+    labels = scales::comma,
+    limits = c(0, max(na_threshold_results_aou$total_rows) * 1.1),  # Add 10% padding at top
+    sec.axis = sec_axis(
+      ~ . * max(na_threshold_results_aou$positive_cases) / max(na_threshold_results_aou$total_rows),
+      name = "Positive Cases",
+      labels = scales::comma
+    )
+  ) +
+  scale_x_continuous(
+    name = "NA Threshold",
+    breaks = seq(0, 20, by = 5)
+  ) +
+  scale_color_manual(
+    name = "Metric",
+    values = c("Total Rows" = "#2E86AB", "Positive Cases" = "#A23B72")
+  ) +
+  
+  # Theme
+  labs(
+    title = "NA Threshold vs Dataset Size - All Of Us Research Program",
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0),
+    plot.subtitle = element_text(size = 12, hjust = 0, color = "gray40"),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    axis.title.y.left = element_text(color = "#2E86AB", face = "bold"),
+    axis.title.y.right = element_text(color = "#A23B72", face = "bold"),
+    axis.text.y.left = element_text(color = "#2E86AB"),
+    axis.text.y.right = element_text(color = "#A23B72"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "gray90")
+  )
+
+# Save plot
+ggsave(
+  filename = file.path(project_path, "visuals/NA_threshold_impact_AOU.png"),
+  plot = plot_aou,
+  width = 10,
+  height = 7,
+  dpi = 300
+)
+
+ggsave(
+  filename = file.path(project_path, "visuals/NA_threshold_impact_AOU.svg"),
+  plot = plot_aou,
+  width = 10,
+  height = 7
+)
+
+print(plot_aou)
+
+
+
+```
+

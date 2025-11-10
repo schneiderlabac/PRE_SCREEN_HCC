@@ -1,8 +1,6 @@
 ---
 title: "Preprocessing UKB Multi-omic data"
 output:
-  word_document: default
-  html_notebook: default
 editor_options:
   markdown:
     wrap: 72
@@ -28,6 +26,13 @@ source("../config.R") #Loads libraries, variables and global function
 #Blood_Marker_String \<- cat( Blood_Marker_Index\$datafield, sep="", file="blood_marker_index.txt") #when pasting to fread function, delete last comma, and add )) at end of command for syntax correction
 ```
 
+```{r}
+# setwd(sharepoint_ukb)
+# 
+# df_pdff <- fread("processed/UKB_MRI_PDFF.csv")
+# 
+# head(df_pdff)
+```
 
 # Loading Data:
 
@@ -39,12 +44,12 @@ Importing and preprocessing of multimodal data
 | 1b  | Covariates       | df_covariates   |  Varying |
 | 1c  | ICD Diagnosis    | df_diagnosis    |   442277 |
 | 2   | Blood parameters | df_blood        |   456855 |
-| 3   | Metabolomics     | df_metabolomics | 248286   |
-| 4   | Genomics         | df_snp          | 488149   |
-| 5   | Radiomics        | df_mri          | \~50.000 | (Pending)
-
+| 3   | Metabolomics     | df_metabolomics |   248286 |
+| 4   | Genomics         | df_snp          |   488149 |
+| 5   | Radiomics        | df_mri          | \~50.000 |
 
 #### 1. EID, ICD, Covariates, PAR(Importing tables previously processed)
+
 ```{r}
 #setwd(drive)
 #df_eid <- fread("ukb52200.csv", select=c("eid")) %>%    #all eids in UKB
@@ -52,7 +57,7 @@ Importing and preprocessing of multimodal data
 
 #a) df_eid 
 setwd(sharepoint_ukb)
-df_withdrawals <- read.delim("raw/withdrawals.txt")
+df_withdrawals <- fread(withdrawals_path)
 df_eid <- fread("extracted/UKB_Patients_eids.csv") %>% check_and_remove_withdrawals(df_withdrawals)
 
 #b) Covariate data for all 502411 patients: df_covariates 502411
@@ -70,8 +75,21 @@ df_diagnosis <- df_diagnosis %>% check_and_remove_withdrawals(df_withdrawals)
 #sanity(df_diagnosis)
 
 setwd(sharepoint_ukb)
-mapper <- read_excel(master_table, sheet="Mapper")
+mapper <- read_excel(master_table, sheet="Mapper_Limits")
 
+
+
+
+#Setup empty dfs for modalities
+df_blood <- df_eid
+df_metabolomics <- df_eid
+df_snp <- df_eid
+
+```
+```{r}
+
+# Sensitivity analysis, loading data with 1 year future info into df_diagnosis
+df_diagnosis <- fread(file.path(project_path, "data/dataframes/df_diagnosis_1y.csv")) %>% check_and_remove_withdrawals(df_withdrawals)
 ```
 
 ```{r}
@@ -87,10 +105,32 @@ mapper <- read_excel(master_table, sheet="Mapper")
 # innerjoin_df_y(filter_rows_with_pos_entries(df_diagnosis))
 
 ```
+
 ```{r}
 # setwd(sharepoint_ukb)
 # additional <- fread("raw/ukb52200.csv", select=c("eid", "30030-0.0"))
 
+
+```
+
+
+```{r}
+setwd(sharepoint_ukb)
+df_pdff <- fread("raw/ukb52200.csv", select=c("eid", "40061-1.0", "40061-2.0")) %>% check_and_remove_withdrawals(df_withdrawals)
+```
+#### Optional: Blood data instance 1
+
+```{r}
+
+
+# setwd(sharepoint_ukb)
+# #import blood sample data from baseline and change names to measured parameters
+# df_blood_i1 <- fread("raw/ukb52200.csv", select=c("eid", "30160-1.0","30220-1.0","30150-1.0","30210-1.0","30030-1.0","30020-1.0","30300-1.0","30290-1.0","30280-1.0","30120-1.0","30180-1.0","30050-1.0","30060-1.0","30040-1.0","30100-1.0","30260-1.0","30270-1.0","30130-1.0","30190-1.0","30140-1.0","30200-1.0","30170-1.0","30230-1.0","30080-1.0","30090-1.0","30110-1.0","30010-1.0","30070-1.0","30250-1.0","30240-1.0","30000-1.0","30620-1.0","30600-1.0","30610-1.0","30630-1.0","30640-1.0","30650-1.0","30710-1.0","30680-1.0","30690-1.0","30700-1.0","30720-1.0","30660-1.0","30730-1.0","30740-1.0","30750-1.0","30760-1.0","30770-1.0","30780-1.0","30790-1.0","30800-1.0","30810-1.0","30820-1.0","30830-1.0","30850-1.0","30840-1.0","30860-1.0","30870-1.0","30880-1.0","30670-1.0","30890-1.0")) %>% check_and_remove_withdrawals(df_withdrawals)
+# 
+# setwd(sharepoint_ukb)
+# write.csv(df_blood_i1, file="extracted/UKB_Patients_blood_instance_1.csv", row.names=FALSE)    
+# 
+# #setwd(sharepoint_ukb)
 ```
 
 #### 2. Blood sample data for all 502411 patients df_blood 502411
@@ -110,19 +150,26 @@ Blood_Marker_Index <- read_excel(master_table, sheet="Blood count and biochemist
   mutate(datafield = paste0(datafield, '-0.0'))
 
 df_blood <- df_blood %>%
-  rename_with(
-    ~ Blood_Marker_Index$Description[match(., Blood_Marker_Index$datafield)],
-    .cols = -eid  # Exclude 'eid' from renaming
-  )
+  rename_with(function(x) {
+    matched <- match(x, Blood_Marker_Index$datafield)
+    ifelse(is.na(matched), x, Blood_Marker_Index$Description[matched])
+  })
 
 df_blood <- df_blood %>%
   select(eid, all_of(Blood_Marker_Index$Description)) # Order Blood columns
 
+
+
+
 #Overview and handling of NAs by imputing the most common value or removing
 na_blood_col <- data.frame(na_columnwise(df_blood))
+na_blood_col$feature <- rownames(na_blood_col)  # Move rownames to a new column
+na_blood_col <- na_blood_col[, c("feature", setdiff(names(na_blood_col), "feature"))]  # Reorder: feature first
+write.xlsx(na_blood_col, file=paste(project_path, "/supplement/NA_count_df_blood.xlsx", sep=''))
+
 na_blood_row <- rowSums(is.na(df_blood))
 hist(na_blood_row)
-#write.xlsx(na_blood_col, file=paste(project, "/supplement/NA_count_df_blood.xlsx", sep=''))
+
 
 if (na_mode == "impute") {
   summary(df_blood[,1:5])
@@ -132,7 +179,7 @@ if (na_mode == "impute") {
   summary(df_blood[,1:5])
   
 } else if (na_mode == "remove") {     # Your removal code here
-  df_blood <- omit.NA(df_blood, 20)   # Delete rows with >= 20 NAs per Row
+  df_blood <- omit.NA(df_blood, 1)   # Delete rows with > 20 NAs per Row
   df_blood <- df_blood %>% #delete columns with mostly NA values (Lipoprotein A 111.652 NAs; Oestradiol 402.879 NAs; Rheumatoid factor 437.202 NAs)
   select(-c("Rheumatoid factor", "Oestradiol"))     
 }
@@ -173,9 +220,23 @@ if (project_key == "cca") {
   select(-c("Aspartate aminotransferase", "Alanine aminotransferase", "Gamma glutamyltransferase", "SEX", "Alkaline phosphatase"))
   
 }
-
+if (project_key == "panca") {   
+  df_blood_risk <- df_blood %>%
+  select(c("eid", "Aspartate aminotransferase", "Alanine aminotransferase", "Gamma glutamyltransferase", "Alkaline phosphatase" )) %>%
+  inner_join(select(df_covariates, eid, SEX), by = "eid") %>%
+  mutate(
+    Elevated_AST = if_else(SEX == "Female" & `Aspartate aminotransferase` > 35 | SEX == "Male" & `Aspartate aminotransferase` > 50, 1, 0),
+    Elevated_ALT = if_else(SEX == "Female" & `Alanine aminotransferase` > 35 | SEX == "Male" & `Alanine aminotransferase` > 50, 1, 0),
+    Elevated_GGT = if_else(SEX == "Female" & `Gamma glutamyltransferase` > 40 | SEX == "Male" & `Gamma glutamyltransferase` > 60, 1, 0),
+    Elevated_AP = if_else(SEX == "Female" & `Alkaline phosphatase` > 105 | SEX == "Male" & `Alkaline phosphatase` > 130, 1, 0)
+  ) %>%
+  mutate(Elevated_Liver_Enzymes = if_else(Elevated_AST == 1 | Elevated_ALT == 1 | Elevated_GGT == 1, 1, 0)) %>%
+  select(-c("Aspartate aminotransferase", "Alanine aminotransferase", "Gamma glutamyltransferase", "SEX", "Alkaline phosphatase"))
+  
+}
+if (project_key !=panca){
 vec_blood_risk <- colnames(select(df_blood_risk, -eid)) #pass into vector to later remove these columns
-
+}
 #df_diagnosis <- inner_join(df_blood_risk, df_diagnosis, by="eid")
 
 
@@ -186,16 +247,24 @@ vec_blood_risk <- colnames(select(df_blood_risk, -eid)) #pass into vector to lat
 
 df_blood <- adjust_outliers(df_blood, c("HbA1c", "Basophill (%)"))
 
-
-
-
 ```
+Sensitivity analysis
+```{r}
+# #Optional: Specific df_blood consisting only of TOP15 params
+# row_subset <- "par"
+# subsets <- read_excel(paste0(project_path, "/data/reduce_columns_", row_subset, ".xlsx"))
+# top15 <- subsets$Feature[subsets$top15 == 1]
+# top15 <- top15[!is.na(top15) & top15 != ""]
+# df_blood <- df_blood %>%
+#   select(eid, any_of(top15))
+```
+
+
 
 ```{r}
-hist(df_blood$`Basophill (%)`)
+df_blood <- adjust_outliers(df_blood)
+hist(df_blood$`Aspartate aminotransferase`)
 ```
-
-
 
 #### 3. Metabolomics data for 250k patients df_metabolomics
 
@@ -246,6 +315,7 @@ vec_metabolomics <- setdiff(colnames(df_metabolomics), "eid") #this gets importa
 setwd(project_path)
 df_snp <- df_eid
 files <- list.files("genetics")
+files <- grep("\\.raw$", files, value = TRUE)
 vec <- sort(
   unlist(
     lapply(
@@ -254,13 +324,15 @@ vec <- sort(
 df_snp <- df_eid  #create "empty" dataframe with eids to later store SNPs
 
 setwd(sharepoint_ukb)
-for (i in vec) {  #Loop through each SNP
+for (i in files) {  #Loop through each SNP
   print(i)  #control if loop is working
-  snp <- data.frame(read.csv(paste(project_path, "/genetics/", DOI, "_snps_chr",i, ".raw", sep=""), sep=""))  %>% #import snp, change this name according to your file names!
+  snp <- data.frame(read.csv(paste(project_path, "/genetics/", i, sep=""), sep=""))  %>% #import snp, change this name according to your file names!
     rename(c("eid"="FID")) %>%  #eid should always be called eid for merging etc...
     dplyr::select(-c("IID", "PAT", "MAT", "SEX", "PHENOTYPE"))  # only eid and rsXYZ are relevant later on.
   df_snp <- merge(df_snp, snp, by.x="eid", by.y="eid", all.x=TRUE)  #append snps to df
 }
+
+write.csv(df_snp, file=file.path(project_path, "data/dataframes/df_snp_raw.csv"))  
 
 # Convert the numeric values to factors with desired levels
 df_snp[,2:ncol(df_snp)] <- lapply(df_snp[,2:ncol(df_snp)], function(column) {
@@ -293,7 +365,7 @@ na_columnwise(df_snp)
 #sanity(df_snp)
 
 #export df_snp
-#write.csv(df_snp, file=paste(project_path, "/data/dataframes/df_snp.xlsx")  
+write.csv(df_snp, file=file.path(project_path, "data/dataframes/df_snp.csv"))  
 #write.xlsx(na_snp_col, file=paste(project_path, "/supplement/NA_count_df_snp.xlsx", sep=''))
 ```
 
@@ -315,7 +387,9 @@ na_columnwise(df_snp)
 # df_mri <- mri_bulk %>% check_and_remove_withdrawals(df_withdrawals)
 
 ```
+
 MRI T1 ShMolli only
+
 ```{r}
 # setwd(sharepoint_ukb)
 # mri_bulk <- fread("extracted/mri_bulk.csv") 
@@ -353,7 +427,7 @@ merge_dataframes <- function(include_metabolomics = FALSE, filter_par = FALSE, n
         }
       
         # Initial list of dataframes to merge
-        dfs_to_merge <- list(df_eid, df_covariates, df_diagnosis, df_blood, df_blood_risk, df_snp)
+        dfs_to_merge <- list(df_eid, df_covariates, df_diagnosis, df_blood, df_snp)
       
         
         dfs_to_merge <- lapply(dfs_to_merge, convert_eid_to_integer) # Convert 'eid' in each dataframe to integer
@@ -378,7 +452,7 @@ merge_dataframes <- function(include_metabolomics = FALSE, filter_par = FALSE, n
         vec_remove_columns <- if (exists("vec_remove_columns", envir = .GlobalEnv)) get("vec_remove_columns", envir = .GlobalEnv) else NULL
         
         if (reduce_model) {
-          df_merged <- df_merged %>% select(-all_of(vec_remove_columns)) # Removing the columns not necessary
+          df_merged <- df_merged %>% select(-any_of(vec_remove_columns)) # Removing the columns not necessary
         }
         
         # Filter the "population at risk (par) by a prespecified if required
@@ -412,6 +486,7 @@ merge_dataframes <- function(include_metabolomics = FALSE, filter_par = FALSE, n
 ```
 
 # Process and save-function: Defining inner/outer layer, merging with y, creating summary report
+
 ```{r}
 #Initialize the summary report
 global_summary <- data.frame(
@@ -481,8 +556,11 @@ process_and_save <- function(df_x, subset_name) {
     df_y_temp <- df_temp %>%                  # Select JUST the status
       select(c("eid", "status", "status_cancerreg", "date_of_diag", "assessment", "difftime"))  
     
+    # Write layerwise dfs
     write.csv(df_x_temp, file=paste(project_path, "/data/", today, "/X_", tolower(layer), "_", col_subset, "_", subset_name, raw, ".csv", sep=""), row.names=FALSE)
     write.csv(df_y_temp, file=paste(project_path, "/data/", today, "/y_", tolower(layer), "_", col_subset, "_", subset_name, raw, ".csv", sep=""), row.names=FALSE)
+    
+    
     
     
     
@@ -495,20 +573,27 @@ process_and_save <- function(df_x, subset_name) {
     #assign(paste0("df_X_check", row_subset, col_subset, layer), df_x_temp, envir = .GlobalEnv)
     #assign(paste0("df_y_check", row_subset, col_subset, layer), df_y_temp, envir = .GlobalEnv)
   }
+  
+  # Export df_all, one large df with all the raw data across all layers (for future reproducibility, visuals etc)
+  write.csv(df_x_temp, file=paste(project_path, "/data/", today, "/X_", tolower(layer), "_", col_subset, "_", subset_name, raw, ".csv", sep=""), row.names=FALSE)
+  
 }
 
 ```
 
+Execution of normalized merge/process_and save (always execute both
+rows! If not, the global variable "row_subset" will not be set
+correctly)
 
-Execution of normalized merge/process_and save (always execute both rows! If not, the global variable "row_subset" will not be set correctly)
+### Here, we have to merge X and y for once, to make sure that
 
-### Here, we have to merge X and y for once, to make sure that 
-a) for X, all patients with DOI before ukb visit are excluded
-b) for y, that all patients with missing data are excluded from y as well
-c) in the end, both tables have the same length
-
+a)  for X, all patients with DOI before ukb visit are excluded
+b)  for y, that all patients with missing data are excluded from y as
+    well
+c)  in the end, both tables have the same length
 
 ### Normalization function
+
 ```{r}
 vec_covariates <- c("MultipleDeprivationIndex", "Pack years", "Waist circumference", # Columns for "simple" Minmax in covariates
                   "Weight", "Standing height", "Alk_g_d", "Bloodpressure_sys", "Bloodpressure_dia", "BMI", "AGE", "Handgripstrength")
@@ -538,6 +623,7 @@ normalize_data <- function(df, df_cap = NULL, cap = FALSE) {
 ```
 
 # Export normalized data
+
 ```{r}
 
 export_normalized <- TRUE
@@ -579,7 +665,9 @@ par_subset
 
 
 ```
+
 # Export absolute data / Create original dataframe X for Table 1 of Publication (Overview of patient data)
+
 ```{r}
 export_absolute <- TRUE
 
@@ -603,8 +691,8 @@ process_and_save(df_x_par_met_raw, "par_met")
 }
 ```
 
-
 # Summary report (Excel file with count per layer/status, and metadata)
+
 ```{r}
 #Summary report
 grouped_summary <- global_summary %>%
@@ -626,6 +714,7 @@ write_xlsx(sheets_list, path = (paste(project_path, "/data/", today, "/summary_r
 ```
 
 # Create columngroups table (creates table with column names and to which initial df they belong (necessary for feature importance later))
+
 ```{r}
 # Create a list of the dataframes and their names
 dfs = list(df_eid=df_eid, df_covariates=df_covariates, df_diagnosis=df_diagnosis, df_blood=df_blood, df_snp=df_snp, df_metabolomics=df_metabolomics)
@@ -645,15 +734,12 @@ df_columngroups = do.call(rbind, temp_dfs) %>%
 df_columngroups <- df_columngroups[!df_columngroups$column_name %in% vec_remove_columns, ]
 
 today <- format(Sys.Date(), "%d_%m_%Y")
-write.csv(df_columngroups, paste(project_path, "/data/", today, "/columngroups.csv", sep=""), row.names=FALSE)
+write.csv(df_columngroups, paste(project_path, "/data/", today, "/columngroups.csv", sep=""), row.names=FALSE, quote = FALSE)
 
 rm(dfs) #Inefficient way for creating columngroups, uses lots of memory
 
 
 ```
-
-
-
 
 # Table Export Preparation
 
@@ -709,7 +795,7 @@ table1b_order <- c(
 table_alc_order <- c("Alc")
 
 
-
+df_x_all_raw <- merge_dataframes(normalize=FALSE) #Merge all dfs (icd, blood etc)
 
 ```
 
@@ -738,6 +824,7 @@ create_table(df_tbl_1b, "Table 1b", export_RDS=TRUE, head_only=head_only, remove
 ```
 
 # Table Creation PAR
+
 ```{r}
 head_only <- FALSE
 df_all <- df_x_par_raw %>% inner_join(df_y, by = "eid")
@@ -751,6 +838,7 @@ create_table(df_tbl_1, "Table 1_par", export_RDS=TRUE, head_only=head_only, remo
 ```
 
 # Tables ICD/Blood
+
 ```{r}
 head_only <- FALSE
 df_all <- df_x_all_raw %>% inner_join(df_y, by = "eid")
@@ -789,9 +877,8 @@ create_table(df_tbl_snp, "Table SNP", export_RDS=TRUE, head_only=head_only)
 
 ```
 
-
-
 # Male/Female stratified table
+
 ```{r}
 head_only <- FALSE
 # Change "all" to "par" if you want to create tables of just the "patient at risk subset
@@ -839,42 +926,9 @@ Table_ICD_stratified <- import_merge_tables(table_name= "Table_ICD", feature="SE
 
 ```
 
+#Check cause of missing data (merge df_y with every single df to check
+how many cases are lost) Does not work yet
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#Check cause of missing data (merge df_y with every single df to check how many cases are lost)
-Does not work yet
 ```{r}
 setwd(project_path)
 load("data/dataframes/df_y.RData")
@@ -913,7 +967,3 @@ print(na_contributions)
 
 
 ```
-
-
-
-

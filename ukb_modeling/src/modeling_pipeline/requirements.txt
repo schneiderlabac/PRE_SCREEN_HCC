@@ -1,0 +1,9 @@
+ehrapy
+catboost
+shap
+scikit-survival
+#tabpfn
+
+
+#needed after minimal instal:
+torch

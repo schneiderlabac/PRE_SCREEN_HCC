@@ -14,17 +14,23 @@ source("../config.R") #Loads libraries, variables and global function
 #covariate_string <- cat(covariate_index$datafield2, sep="", file="covariate_index.txt") #erstellt .txt datei im Working directory. Diese kann kopiert werden und in die fread-Funktion nach der eid eingefÃ¼gt werden
 
 # A Extract covariates of interest
- #setwd(sharepoint_ukb)
-#covariates<- fread("raw/ukb52200.csv", select=c("eid", '21000-0.0','21001-0.0','48-0.0','21002-0.0','50-0.0','53-0.0', '54-0.0', '21003-0.0','31-0.0','20116-0.0','20160-0.0','20161-0.0','20117-0.0','1558-0.0','3731-0.0','4407-0.0','4418-0.0','4429-0.0','4440-0.0','4451-0.0','4462-0.0','1568-0.0','1578-0.0','1588-0.0','1598-0.0','1608-0.0','5364-0.0','1618-0.0','1628-0.0','2664-0.0','10818-0.0','3859-0.0','10853-0.0','4080-0.0','4080-0.1','6153-0.0','6177-0.0','90087-0.0','20107-0.0','20110-0.0','20111-0.0','2443-0.0','26410-0.0','26427-0.0','26426-0.0','22009-0.1','22009-0.2','22009-0.3','22009-0.4','22009-0.5', "93-0.0"))
-#write.csv(covariates, file="extracted/covariates.csv", row.names=FALSE)
+ setwd(sharepoint_ukb)
 
+covariate_index <- read_excel(master_table, sheet = "All covariates")   # import index data (Liste mit allen covariates, codes, units etc)
+covariate_final <- read_excel(master_table, sheet = "Final covariates") # final list should look like this
+
+if (!file.exists(file.path(project_path,"data/dataframes/covariates.csv"))){ # if covars not already extracted from the big UKB dataset this will run or you copy the base covariates from the ukb/extracted
+  cols=c("eid",read_excel(master_table, sheet = "All covariates")$datafield1)
+    covariates<- fread("raw/ukb52200.csv", select=cols)
+  write.csv(covariates, file=file.path(project_path,"data/dataframes/covariates.csv"), row.names=FALSE)
+}
 
 # B. Load from "extracted" folder
 setwd(sharepoint_ukb) 
-df_withdrawals <- read.delim("raw/withdrawals.txt")
+df_withdrawals <- fread(withdrawals_path)
 covariates <- fread("extracted/covariates.csv")  
 covariates <-as.data.frame(covariates) %>% check_and_remove_withdrawals(df_withdrawals)
-covariates <- covariates[!duplicated(covariates$eid), ]
+covariates <- covariates[!duplicated(covariates$eid),]
 
     
 # to add aditional covariate (please also add metadata to master table!)
@@ -33,10 +39,6 @@ covariates <- covariates[!duplicated(covariates$eid), ]
 # covariates <- cbind(covariates, additional) #add them to covariates
 # setwd(sharepoint_ukb) 
 # write.csv(covariates, file="extracted/covariates.csv", row.names=FALSE) #export the new (raw) covariates file w/o preprocessing
-
-
-covariate_index <- read_excel(master_table, sheet = "All covariates")   # import index data (Liste mit allen covariates, codes, units etc)
-covariate_final <- read_excel(master_table, sheet = "Final covariates") # final list should look like this
 
 df_covariates <- covariates 
 df_covariates <-  setnames(covariates, old = covariate_index$datafield1, new = covariate_index$Assessment, skip_absent=TRUE) #rename variables after index df
@@ -270,9 +272,9 @@ sum(is.na(df_covariates$`Pack years`))
           df_covariates_alcohol <- subset (df_covariates, select = vec_alcohol) %>%
             mutate_all(funs(ifelse(. == -3 | . == -1, NA, .)))
 
-          #Zuerst berechne ich fÃ¼r wÃ¶chentlichen Konsum g/d Alcohol 
+          #Zuerst berechne ich fÃ¼r wöchentlichen Konsum g/d Alcohol 
           # * 400 entspricht Volumen des Glases, * 5/100 enstpricht Alkoholgehalt in prozent, 
-          #* 0.8 Aufnahmeanteil im KÃ¶rper, / 7 fÃ¼r Tage der Woche
+          #* 0.8 Aufnahmeanteil im Körper, / 7 fÃ¼r Tage der Woche
           Redwine_week <- (df_covariates_alcohol$`Average weekly red wine intake` * (100 * (12/100) * 0.8)) / 7 
           Whitewine_week <- (df_covariates_alcohol$`Average weekly champagne plus white wine intake` * (100 * (12/100) * 0.8)) / 7 
           Beer_week <- (df_covariates_alcohol$`Average weekly beer plus cider intake` * (400 * (4/100) * 0.8)) / 7 
@@ -313,12 +315,12 @@ sum(is.na(df_covariates$`Pack years`))
           Alk$SEX.umgekehrt <- ifelse(Alk$SEX == 0, 1, ifelse(Alk$SEX == 1, 0, Alk$SEX))
           Alk$PatAlkoholkonsum <- (Alk$SEX * Alk$`g/d` / 60) + (Alk$SEX.umgekehrt * Alk$`g/d` / 40) 
           Alk$PatAlkoholkonsum <- ifelse(Alk$PatAlkoholkonsum >= 1, 1, ifelse(Alk$PatAlkoholkonsum < 0.9999999999, 0, Alk$PatAlkoholkonsum))
-          Alk$ErhÃ¶hterAlkoholkonsum <- (Alk$SEX * Alk$`g/d` / 24) + (Alk$SEX.umgekehrt * Alk$`g/d` / 12) 
-          Alk$ErhÃ¶hterAlkoholkonsum <- ifelse(Alk$ErhÃ¶hterAlkoholkonsum >= 1, 1, ifelse(Alk$ErhÃ¶hterAlkoholkonsum < 0.9999999999, 0, Alk$ErhÃ¶hterAlkoholkonsum))
+          Alk$ErhöhterAlkoholkonsum <- (Alk$SEX * Alk$`g/d` / 24) + (Alk$SEX.umgekehrt * Alk$`g/d` / 12) 
+          Alk$ErhöhterAlkoholkonsum <- ifelse(Alk$ErhöhterAlkoholkonsum >= 1, 1, ifelse(Alk$ErhöhterAlkoholkonsum < 0.9999999999, 0, Alk$ErhöhterAlkoholkonsum))
 
           # merge new columns to df, and get rid of unnecessary alcohol columns
           df_covariates <- df_covariates %>%
-            cbind(Path_Alk = Alk$PatAlkoholkonsum, High_Alk= Alk$ErhÃ¶hterAlkoholkonsum, Alk_g_d= Alk$`g/d`) 
+            cbind(Path_Alk = Alk$PatAlkoholkonsum, High_Alk= Alk$ErhöhterAlkoholkonsum, Alk_g_d= Alk$`g/d`) 
           df_covariates$Path_Alk <- as.factor(df_covariates$Path_Alk)
           df_covariates$High_Alk <- as.factor(df_covariates$High_Alk)
           
@@ -405,7 +407,23 @@ summary(df_covariates$Bloodpressure_dia)
           df_covariates$Family_diabetes <- ifelse(df_covariates$`Illnesses of father` == 9 | df_covariates$`Illnesses of mother` == 9 | df_covariates$`Illnesses of siblings` == 9, 1, 0)
           df_covariates$Family_diabetes[is.na(df_covariates$Family_diabetes)] <- 0
           df_covariates$Family_diabetes <- as.factor (df_covariates$Family_diabetes)
-         # sanity(df_covariates[c("Family_diabetes")])
+          
+          # bowel cancer
+          df_covariates$Family_Bowel_Cancer <- ifelse(df_covariates$`Illnesses of father` == 4 | df_covariates$`Illnesses of mother` == 4 | df_covariates$`Illnesses of siblings` == 4, 1, 0)
+          df_covariates$Family_Bowel_Cancer[is.na(df_covariates$Family_Bowel_Cancer)] <- 0
+          df_covariates$Family_Bowel_Cancer <- as.factor (df_covariates$Family_Bowel_Cancer)
+         
+          # brest cancer
+          df_covariates$Family_Breast_Cancer <- ifelse(df_covariates$`Illnesses of father` == 5 | df_covariates$`Illnesses of mother` == 5 | df_covariates$`Illnesses of siblings` == 5, 1, 0)
+          df_covariates$Family_Breast_Cancer[is.na(df_covariates$Family_Breast_Cancer)] <- 0
+          df_covariates$Family_Breast_Cancer <- as.factor (df_covariates$Family_Breast_Cancer)
+          
+          df_covariates$Family_Prostate_Cancer <- ifelse(df_covariates$`Illnesses of father` == 13 | df_covariates$`Illnesses of mother` == 13 | df_covariates$`Illnesses of siblings` == 13, 1, 0)
+          df_covariates$Family_Prostate_Cancer[is.na(df_covariates$Family_Prostate_Cancer)] <- 0
+          df_covariates$Family_Prostate_Cancer <- as.factor (df_covariates$Family_Prostate_Cancer)
+          
+          
+          # sanity(df_covariates[c("Family_diabetes")])
           
           
 #d) Physical activity -> for now removed, to little items available          
@@ -480,7 +498,7 @@ mapper <- read_excel(paste0(sharepoint_ukb, "/", master_table), sheet = "Mapper"
 result <- limit_df(df_covariates, mapper)
 
 # The modified dataframe is now in result$df
-df_covariates <- result$df
+df_covariates <- result
 ```
 
 

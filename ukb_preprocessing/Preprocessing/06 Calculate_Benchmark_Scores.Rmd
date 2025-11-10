@@ -14,7 +14,7 @@ source("../config.R") #Loads libraries, variables and global function
 
 ```{r}
 setwd(sharepoint_ukb) #from central storage
-df_withdrawals <- read.delim("raw/withdrawals.txt")
+df_withdrawals <- fread("raw/withdrawals.csv")
 df_blood <- fread("extracted/UKB_Patients_blood.csv") %>% check_and_remove_withdrawals(df_withdrawals)
 df_afp <- fread("extracted/AFP.csv") %>% check_and_remove_withdrawals(df_withdrawals) %>%          #just for AMAP2
   select(-V1) %>%                    # Remove the "V1" column
@@ -40,10 +40,10 @@ Blood_Marker_Index <- read_excel(paste0(sharepoint_ukb, "/", master_table), shee
   mutate(datafield = paste0(datafield, '-0.0'))
 
 df_blood <- df_blood %>%
-  rename_with(
-    ~ Blood_Marker_Index$Description[match(., Blood_Marker_Index$datafield)],
-    .cols = -eid  # Exclude 'eid' from renaming
-  )
+  rename_with(function(x) {
+    matched <- match(x, Blood_Marker_Index$datafield)
+    ifelse(is.na(matched), x, Blood_Marker_Index$Description[matched])
+  })
 
 df_blood <- df_blood %>%
   select(eid, all_of(Blood_Marker_Index$Description)) %>% # Order Blood columns
@@ -126,7 +126,7 @@ write.csv(df_amap_par, file=paste(project_path, "/Models/df_amap_par.csv", sep='
 # Calculate Fib-4
 In Sterling et al, which studied patients co-infected with HIV and Hepatitis C, a simple, non-invasive index (FIB-4) was developed to identify significant hepatic fibrosis.
 
-The formula for FIB-4 is: Age ([yr] x AST [U/L]) / ((PLT [10(9)/L]) x (ALT [U/L])(1/2)).
+The formula for FIB-4 is: Age ([yr] x AST [U/L]) / ((PLT [10(9)/L]) x sqrt(ALT [U/L])).
 
 The AUROC of the index was 0.765 for differentiation between Ishak stage 0-3 and 4-6. At a cutoff of <1.45 in the validation set, the negative predictive value to exclude advanced fibrosis (stage 4-6) was 90% with a sensitivity of 70%. A cutoff of >3.25 had a positive predictive value of 65% and a specificity of 97%. Using these cutoffs, 87% of the 198 patients with FIB-4 values outside 1.45-3.25 would be correctly classified, and liver biopsy could be avoided in 71% of the validation group.
 
@@ -143,7 +143,7 @@ df_fib4 <- df_covariates %>% select("eid", "AGE") %>%
 
 df_fib4 <- df_fib4 %>%
   mutate(
-    FIB4_orig = (AGE * AST) / (PLT * (ALT * 0.5))
+    FIB4_orig = (AGE * AST) / (PLT * sqrt(ALT))
   )
 
 # Calculate normalized FIB-4 score (0 to 1)
@@ -233,6 +233,71 @@ df_nfs <- df_nfs %>%
 # Summary of NFS scores
 summary(df_nfs$NFS)
 ```
+#Calculate LiverRisk
+```{r}
+# Access relevant columns and impute NAs
+df_liverRisk <- df_blood %>% 
+  select(c("eid", "Glucose", "Cholesterol", "Aspartate aminotransferase", 
+          "Alanine aminotransferase", "Gamma glutamyltransferase", "Platelet count")) %>%
+  rename(
+    glucose = `Glucose`,
+    cholesterol = `Cholesterol`,
+    AST = `Aspartate aminotransferase`,
+    ALT = `Alanine aminotransferase`,
+    GGT = `Gamma glutamyltransferase`,
+    platelets = `Platelet count`
+  ) %>%
+  left_join(df_covariates %>% select(c("eid", "AGE", "SEX")), by = "eid")
+
+# Convert to data frame
+df_liverRisk <- as.data.frame(df_liverRisk)
+
+# Impute missing values
+df_liverRisk[,2:7] <- mean.impute(df_liverRisk[,2:7])
+
+# Prepare gender/sex variable (0 = female, 1 = male)
+df_liverRisk$gender <- ifelse(df_liverRisk$SEX == "Female", 0, 1)
+df_liverRisk$gender <- as.numeric(df_liverRisk$gender)
+
+# Calculate LiverRisk score (original)
+df_liverRisk$LiverRisk_orig <- 3.75 + 
+                           0.265 * df_liverRisk$gender + 
+                           0.0147 * df_liverRisk$AGE + 
+                           0.47 * df_liverRisk$glucose - 
+                           0.357 * df_liverRisk$cholesterol + 
+                           0.021 * df_liverRisk$AST + 
+                           0.00178 * df_liverRisk$ALT + 
+                           0.0164 * df_liverRisk$GGT - 
+                           0.00495 * df_liverRisk$platelets
+
+# Apply min-max normalization to scale between 0 and 1
+df_liverRisk <- df_liverRisk %>%
+  mutate(
+    LiverRisk = (LiverRisk_orig - min(LiverRisk_orig, na.rm = TRUE)) / 
+                (max(LiverRisk_orig, na.rm = TRUE) - min(LiverRisk_orig, na.rm = TRUE))
+  )
+
+# Keep only eid, LiverRisk and gender
+df_liverRisk <- df_liverRisk %>% 
+  select(c("eid", "LiverRisk", "gender"))
+  
+# Summary statistics
+summary(df_liverRisk$LiverRisk)
+```
+```{r}
+
+```
+
+
+
+# Add 1 year cirrhosis info as marker
+```{r}
+df_cirrhosis_1y <- read.csv(paste0(project_path, "/data/dataframes/df_diagnosis_1y.csv")) %>%
+  select(c("eid", "Liver.cirrhosis")) %>%
+  rename("Cirrhosis" = "Liver.cirrhosis")
+
+df_cirrhosis_1y
+```
 
 # Merge scores
 ```{r}
@@ -241,7 +306,9 @@ df_benchmark <- df_amap %>%
   inner_join(df_apri %>% select(eid, APRI), by = "eid") %>%
   inner_join(df_fib4 %>% select(eid, FIB4), by = "eid") %>%
   inner_join(df_nfs %>% select(eid, NFS), by = "eid") %>%
-  inner_join(df_icd %>% select(eid, `Liver cirrhosis`), by = "eid")
+  inner_join(df_icd %>% select(eid, `Liver cirrhosis`), by = "eid") %>%
+  inner_join(df_liverRisk %>% select(eid, LiverRisk), by = 'eid') %>%
+  inner_join(df_cirrhosis_1y %>% select(eid, Cirrhosis), by = 'eid')
 
 df_benchmark <- merge(df_benchmark, df_y, by="eid")
 
@@ -254,11 +321,28 @@ print(cor_matrix)
 ```
 
 
+```{r}
+df <- read.csv(file=paste(project_path, "/data/dataframes/df_benchmark.csv", sep=''))
+```
+
+```{r}
+df = df %>%
+  inner_join(df_cirrhosis_1y %>% select(eid, Cirrhosis), by = 'eid') %>%
+  select(-("Li"))
+
+
+write.csv(df, file=paste(project_path, "/data/dataframes/df_benchmark.csv", sep=''))
+```
 
 
 
+```{r}
+df = df %>%
+  inner_join(df_fib4 %>% select(eid, FIB4), by = 'eid') 
 
 
+write.csv(df, file=paste(project_path, "/data/dataframes/df_benchmark.csv", sep=''))
+```
 
 
 
@@ -278,6 +362,8 @@ print(cor_matrix)
 
 ```
 
+
+@Louis if you see this you successfully cloned this script as of 30/05/25
 
 
 Export

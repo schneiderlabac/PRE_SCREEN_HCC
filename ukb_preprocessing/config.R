@@ -1,4 +1,4 @@
-install.packages(c("stats", "base", "broom", "tidyr", "tidyverse", "readr", "dplyr", "gtools", "data.table", "ggplot2", "rJava", "xlsx", "readxl", "hrbrthemes", "kableExtra", "ggthemes", "ggrepel", "extrafont", "remotes", "writexl", "table1", "jsonlite", "gtsummary", "gt", "circlize", "openxlsx", "lubridate", "maps", "magrittr", "scales", "purrr"))
+#install.packages(c("stats", "base", "broom", "tidyr", "tidyverse", "readr", "dplyr", "gtools", "data.table", "ggplot2", "rJava", "xlsx", "readxl", "hrbrthemes", "kableExtra", "ggthemes", "ggrepel", "extrafont", "remotes", "writexl", "table1", "jsonlite", "gtsummary", "gt", "circlize", "openxlsx", "lubridate", "maps", "magrittr", "scales", "purrr"))
 library(stats)
 library(base)
 library(broom)
@@ -87,9 +87,9 @@ if (user %in% names(user_configs)) {    # Set user-specific variables after over
 
 #project_key <- hcc #hcc or cca (choose one of the present project_keys) or write a new key in the command line
 project_path <- file.path(sharepoint, "projects", project_key)
-IOI <- project_configs[[project_key]]$IOI
-IOIs <- project_configs[[project_key]]$IOIs
-DOI <- project_configs[[project_key]]$DOI
+IOI <- project_configs[[project_key]]$IOI    #IOI = ICD code of interest
+IOIs <- project_configs[[project_key]]$IOIs # multiple ICD codes of interest ;)
+DOI <- project_configs[[project_key]]$DOI   # Diagnosis of interest 
 icd_dict <- project_configs[[project_key]]$icd_dict
 risk_constellation <- project_configs[[project_key]]$risk_constellation
 risk_constellation_codes <- project_configs[[project_key]]$risk_constellation_codes
@@ -99,6 +99,7 @@ diag_codes <- project_configs[[project_key]]$diag_codes
 timeframe <- as.numeric(project_configs[[project_key]]$timeframe)
 reduce_model <- as.logical(project_configs[[project_key]]$reduce_model)
 vec_remove_columns <- project_configs[[project_key]]$remove_columns
+oper_codes <- project_configs[[project_key]]$oper_codes
 
 
 dir.create(file.path(project_path, "/data/dataframes"), showWarnings = FALSE) #Create folders 
@@ -112,11 +113,17 @@ check_for_NAs <- "no" # "yes" or "no"
 
 
 ######## Dynamic file paths ##########
-hesin_path <- "raw/hesin.txt"
+#The `hesin` and `hesin_diag` tables in the UK Biobank dataset contain **hospital episode statistics (HES)**, capturing **inpatient hospital admissions** and **diagnostic codes** for participants. These tables are crucial for understanding the medical history of individuals, particularly for longitudinal studies.
+# Hesin_oper further provides operational procedure codes
+# death_date and cause are tables from the UK death registry, they provide info on all deaths registered in UK
+# Withdrawals is a simple file with all eids of people who have withdrawn consent from being processed further. These eids will all be always removed as a first step after import.
+
+hesin_path <- "raw/hesin.txt"             
 hesin_diag_path <- "raw/hesin_diag_Jan2024.txt"
+hesin_oper_path <- "raw/hesin_oper.txt"
 death_date_path <- "raw/death_Jan2024.txt"
 death_cause_path <- "raw/death_cause_Jan2024.txt"
-withdrawals_path <- "raw/withdrawals.txt"
+withdrawals_path <- "raw/withdrawals.csv"
 
 source("preprocessing_functions.R") #Make sure to run this before changing the working directory to the sharepoint
 
@@ -124,7 +131,7 @@ source("preprocessing_functions.R") #Make sure to run this before changing the w
 
 
 # Project specific patients-at-risk subsettings
-par_index <- read_excel(icd_dict_path, sheet= "Patients at risk") #Load table with diagnosis for subsetting
+par_index <- read_excel(icd_dict_path, sheet= "Patients at risk") #Load table with diagnosis for subsetting, PAR = Patients at risk
 par_groups <- unique(par_index$Group) #Store unique groups (e.g. Cirrhosis, Viral hepatitis)
 par_subset <- project_configs[[project_key]]$par_subset #load project-specific subsets of patients-at-risk
 vec_risk_constellation <- par_index$Diagnosis[par_index$Group %in% par_subset] #subset index for project-specific requirements

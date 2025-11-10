@@ -18,7 +18,7 @@ source("../config.R")
 
 #a) df_eid 
 setwd(sharepoint_ukb)
-df_withdrawals <- read.delim("raw/withdrawals.txt")
+df_withdrawals <- read.delim("raw/withdrawals.csv")
 df_eid <- fread("extracted/UKB_Patients_eids.csv") %>% check_and_remove_withdrawals(df_withdrawals)
 
 #b) Covariate data for all 502411 patients: df_covariates 502411

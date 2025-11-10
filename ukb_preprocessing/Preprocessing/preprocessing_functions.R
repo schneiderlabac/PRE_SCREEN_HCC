@@ -196,6 +196,9 @@ count_eid_duplications <- function(df, df_name = "df") {
 
 
 
+load_df_all <- function(date, col_subset="all", row_subset="basic")
+
+
 
 
 
@@ -293,7 +296,7 @@ summarize_na <- function(df_covariates) {
   return(df_cov_amount)
 }
 
-####### Function that will omit rows in a data frame "df" with more than a specified number of NA values:
+####### Function that will omit rows in a data frame "df" with more than or equal to a specified number of NA values:
 omit.NA <- function(df, threshold) {
   # Find number of NA values per row
   na_counts <- rowSums(is.na(df))
@@ -395,37 +398,67 @@ impute_random <- function(data, covariate_final) {
 }
 
 
-adjust_outliers <- function(df, column_names) {
-  # Ensure column_names is a character vector
-  if (!is.character(column_names)) {
-    stop("column_names must be a character vector")
+adjust_outliers <- function(df, column_names = NULL, percentile = 0.999) {
+  #' Adjust Outliers in a DataFrame by Winsorizing
+  #'
+  #' This function adjusts outliers in a given DataFrame by capping extreme values
+  #' at a specified upper percentile (default is 99.9%). If no specific columns are provided,
+  #' it automatically applies to all columns except "eid".
+  #'
+  #' @param df A data.frame. The input dataset where outliers should be adjusted.
+  #' @param column_names A character vector of column names to process. If NULL (default),
+  #' all columns except "eid" are selected.
+  #' @param percentile A numeric value between 0 and 1 specifying the percentile
+  #' threshold for outlier adjustment. Defaults to 0.999 (99.9th percentile).
+  #'
+  #' @return A data.frame with adjusted columns where values above the specified
+  #' percentile are replaced by the percentile limit.
+  # Ensure percentile is between 0 and 1
+  
+  
+  if (!is.numeric(percentile) || percentile <= 0 || percentile >= 1) {
+    stop("percentile must be a numeric value between 0 and 1 (exclusive).")
   }
   
-  # Ensure all specified columns exist in the dataframe
-  missing_columns <- setdiff(column_names, colnames(df))
-  if (length(missing_columns) > 0) {
-    stop(paste("The following columns do not exist in the dataframe:", 
-               paste(missing_columns, collapse = ", ")))
+  # If no column names are provided, select all except "eid"
+  if (is.null(column_names)) {
+    column_names <- setdiff(names(df), "eid")
+  } else {
+    # Ensure column_names is a character vector
+    if (!is.character(column_names)) {
+      stop("column_names must be a character vector.")
+    }
+    
+    # Check if all specified columns exist
+    missing_columns <- setdiff(column_names, names(df))
+    if (length(missing_columns) > 0) {
+      stop(paste("The following columns do not exist in the dataframe:", 
+                 paste(missing_columns, collapse = ", ")))
+    }
   }
   
   for (column_name in column_names) {
-    # Calculate the 99.9th percentile
-    quantile_999 <- quantile(df[[column_name]], 0.999, na.rm = TRUE)
+    # Calculate the specified percentile
+    quantile_limit <- quantile(df[[column_name]], percentile, na.rm = TRUE)
     
     # Identify outliers
-    outliers <- df[[column_name]] > quantile_999
+    outliers <- df[[column_name]] > quantile_limit
     outliers_count <- sum(outliers, na.rm = TRUE)
     outliers_range <- range(df[[column_name]][outliers], na.rm = TRUE)
     
-    # Replace outliers with the 99.9th percentile value
-    df[[column_name]] <- ifelse(outliers, quantile_999, df[[column_name]])
+    # Replace outliers with the percentile limit
+    df[[column_name]] <- ifelse(outliers, quantile_limit, df[[column_name]])
     
-    # Print the range of values that were cut
+    # Print summary
     cat("\nColumn:", column_name, "\n")
-    cat("Outliers detected and adjusted to the 99.9th percentile limit:\n")
+    cat("Outliers detected and adjusted to the", percentile * 100, "percentile limit:\n")
     cat("Number of outliers:", outliers_count, "\n")
-    cat("Range of outliers:", paste(outliers_range, collapse = " to "), "\n")
-    cat("99.9th percentile limit:", quantile_999, "\n")
+    if (outliers_count > 0) {
+      cat("Range of outliers:", paste(outliers_range, collapse = " to "), "\n")
+    } else {
+      cat("No outliers detected.\n")
+    }
+    cat("Percentile limit value:", quantile_limit, "\n")
   }
   
   return(df)
@@ -593,11 +626,13 @@ create_table <- function(df_tbl, table_name, table_name_prefix="All", project_pa
     NULL
   }
   
+  print(type_list)
+  
   # Generate the summary table
   Table_gtsummary <- df_tbl %>%
     tbl_summary(
       by = status,
-      type = type_list,
+      type = NULL,#type_list,
       value = value_list,
       label = label_list,
       statistic = list(
@@ -606,13 +641,26 @@ create_table <- function(df_tbl, table_name, table_name_prefix="All", project_pa
       ),
       digits = all_continuous() ~ 1,
     ) %>%
+    add_overall() %>%
+    modify_table_body(
+      ~ .x %>%
+        mutate(
+          across(starts_with("stat_"), ~ case_when(
+            # Mask counts <20 in categorical columns and remove percentage
+            str_detect(., "^\\d+,?\\d* \\(") & 
+              as.numeric(gsub(",", "", str_extract(., "^\\d+,?\\d*"))) < 5 ~ 
+              str_replace(., "^\\d+,?\\d* \\(.*?\\)", "<5"),  # Removes count and percentage
+            TRUE ~ .
+          ))
+        )
+    ) %>%
     add_p(
       test = list(
         all_continuous() ~ "t.test",
         all_categorical() ~ "chisq.test"
       )
     ) %>%
-    add_overall() %>%
+    
     bold_labels() %>%
     italicize_levels() %>%
     bold_p() %>%
@@ -968,10 +1016,16 @@ create_map_plot <- function(df_loc_counts, df_country, base_size = 12) {
 
 
 
-plot_included_discarded_cases <- function(df, base_size = 18) {
+plot_included_discarded_cases <- function(df, base_size = 18, suffix="") {
   supplement_visuals_dir <- get("supplement_visuals_dir", envir = .GlobalEnv)
-  doi_included <- get("doi_included", envir = .GlobalEnv)
-  doi_discarded <- get("doi_discarded", envir = .GlobalEnv)
+  
+  doi_discarded <- sum(df$discard)
+  print(paste("Number of cases of", DOI, "discarded because of diagnosis before/during assessment time:", doi_discarded))
+  
+  df_clean <- subset(df, status != 2)
+  doi_included <- sum(df_clean$status)
+  print(paste("Number of cases of", DOI, "still available after removing previously diagnosed people:", doi_included))
+  
   included_label <- paste("Included (n=", doi_included, ")", sep = "") # Custom labels for the legend
   discarded_label <- paste("Discarded (n=", doi_discarded, ")", sep = "")
   n_total <- nrow(df)
@@ -1012,7 +1066,7 @@ plot_included_discarded_cases <- function(df, base_size = 18) {
   guides(fill = guide_legend(override.aes = list(colour = "white")))
   
   print(plot)
-  ggsave(filename = file.path(supplement_visuals_dir, paste0(DOI, "_yearly_cases.svg")), 
+  ggsave(filename = file.path(supplement_visuals_dir, paste0(DOI, "_yearly_cases", suffix, ".svg")), 
          plot = plot, width = 10, height = 10, bg = "transparent")
   
   
