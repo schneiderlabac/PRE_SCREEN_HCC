@@ -1,7 +1,8 @@
-# hcc_u_soon
-Preprocessing and Modelling Pipelines for the research project "Machine learning predicts liver cancer risk from routine clinical data: a large population-based multicentric study"
+# PRE_SCREEN_HCC
 
-## This repository is a collection of three separate repositories used to create the project "Machine learning predicts liver cancer risk from routine clinical data: a large population-based multicentric study"
+Preprocessing and Modelling Pipelines for the research project "Machine learning predicts hepatocellular carcinoma risk from routine clinical data: a large population-based multicentric study"
+
+## This repository is a collection of three separate repositories used to create the project "Machine learning predicts hepatocellular carcinoma risk from routine clinical data: a large population-based multicentric study"
 
 The subfolders ext_val_aou ; ukb_modeling ; ukb_preprocessing each contain separate Readme files to guide you through the respective repository.
 
