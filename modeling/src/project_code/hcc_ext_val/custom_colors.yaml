@@ -1,0 +1,100 @@
+# This file contains the default colors for the different scenarios and scenario lists used for ROCs in the Schneiderlab
+# You can create a copy of this file in your project folder. If a .py file calls for color info, it will first look in your project folder
+# and only if that is empty, it will refer to this default_colors.yaml. That works e.g. for the warpper_roc_curve.py
+
+scenarios_colors:
+  A: '#4995AD'
+  B: '#385579'
+  C: '#C13617'
+  D: '#F0903E'
+  E: '#F0C872'
+  Demographics: '#4995AD'
+  Diagnosis: '#385579'
+  Blood: '#C13617'
+  SNP: '#F0903E'
+  Metabolomics: '#F0C872'
+  Csmall: '#402155'
+  AMAP-RFC: '#c9c9c9'
+  TOP75: '#cb6043'
+  TOP30: '#d1846e'
+  TOP15: '#d0a79a'
+  aMAP: '#E0E0E0'           # Light grey
+  APRI: '#B0B0B0'           # Medium-light grey
+  FIB4: '#909090'           # Medium grey
+  NFS: '#707070'         # Medium-dark grey
+  AFP: '#4895ad'
+  Liver cirrhosis: '#385579' # Dark grey
+  Cirrhosis: '#385579' # Dark grey
+  df_covariates: "#4995AD"
+  df_diagnosis: "#385579"
+  df_blood: "#C13617"
+  df_snp: "#F0903E"
+  df_metabolomics: "#F0C872"
+  TOP15_Sensitivity_No_NA': '#d0a79a'
+
+scenario_lists:
+  incremental: ['A', 'B', 'C', 'D', 'E']
+  incremental_2: ['A', 'B', 'C', 'D', 'E', 'TOP15']
+  separate: ['Demographics', 'Diagnosis', 'Blood', 'SNP', 'Metabolomics']
+  small_prev: ['C', 'Csmall', 'AMAP-RFC']
+  small: ['AMAP-RFC', 'C', 'TOP75', 'TOP30', 'TOP15']
+  small_par: ['AMAP-RFC', 'C', 'TOP30', 'TOP15']
+  c: ['C', 'TOP15']
+  benchmarks: ['aMAP', 'APRI', 'FIB4', 'NFS', 'LiverRisk', 'Liver cirrhosis']
+  no_impute: ['TOP15_Sensitivity_No_NA']
+
+
+title_dict:
+  'par_Model_A': 'Model A'  # Title legend for scenario A (Demographics)
+  'par_Model_B': 'Model B'  # Title legend for scenario B (Demographics, Diagnosis)
+  'par_Model_C': 'Model C'  # Title legend for scenario C (Covariates, Diagnosis, Blood)
+  'par_Model_D': 'Model D'  # Title legend for scenario D (Covariates, Diagnosis, Blood, SNP)
+  'par_Model_E': 'Model E' # Title legend for scenario E (Covariates, Diagnosis, Blood, SNP, Metabolomics)
+  'all_Model_A': 'Model A'  # Title legend for scenario A (Demographics)
+  'all_Model_B': 'Model B'  # Title legend for scenario B (Demographics, Diagnosis)
+  'all_Model_C': 'Model C'  # Title legend for scenario C (Covariates, Diagnosis, Blood)
+  'all_Model_D': 'Model D'  # Title legend for scenario D (Covariates, Diagnosis, Blood, SNP)
+  'all_Model_E': 'Model E' # Title legend for scenario E (Covariates, Diagnosis, Blood, SNP, Metabolomics)
+  'par_aMAP' : 'aMAP'
+  'par_Model_AMAP-RFC': 'aMAP RFC'
+  'par_Model_TOP75' : 'TOP75'
+  'par_Model_TOP30' : 'TOP30'
+  'par_Model_TOP15' : 'TOP15'
+  'all_aMAP' : 'aMAP'
+  'all_Model_AMAP-RFC': 'aMAP RFC'
+  'all_Model_TOP75' : 'TOP75'
+  'all_Model_TOP30' : 'TOP30'
+  'all_Model_TOP15' : 'TOP15'
+  'par_LiverRisk' : 'Liver Risk'
+  'par_Liver cirrhosis' : 'Liver cirrhosis'
+  'all_LiverRisk' : 'Liver Risk'
+  'all_Liver cirrhosis' : 'Liver cirrhosis'
+  'par_APRI' : 'APRI'
+  'par_FIB4' : 'FIB4'
+  'par_NFS' : 'NFS'
+  'all_APRI' : 'APRI'
+  'all_FIB4' : 'FIB4'
+  'all_NFS' : 'NFS'
+  'par_Demographics': 'Demographics'
+  'par_Diagnosis': 'Diagnosis'
+  'par_Blood': 'Blood'
+  'par_SNP': 'SNP'
+  'par_Metabolomics': 'Metabolomics'
+  'all_Model_Demographics': 'Demographics'
+  'all_Model_Diagnosis': 'Diagnosis'
+  'all_Model_Blood': 'Blood'
+  'all_Model_SNP' : 'Genomics'
+
+
+
+
+
+  # For violin plot colors in RGB:
+
+color_map_rgba:
+  df_covariates: (0.28627450980392155, 0.5843137254901961, 0.6784313725490196)  # #4995AD
+  df_diagnosis: (0.2196078431372549, 0.3333333333333333, 0.4745098039215686)  # #385579
+  df_blood: (0.7568627450980392, 0.21176470588235294, 0.09019607843137255)  # #C13617
+  df_snp: (0.9411764705882353, 0.5647058823529412, 0.24313725490196078)  # #F0903E
+  df_metabolomics: (0.9411764705882353, 0.7843137254901961, 0.4470588235294118)  # #F0C872
+
