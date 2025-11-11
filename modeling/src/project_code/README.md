@@ -1,15 +1,17 @@
+# Overview
+
 hcc includes the relevant files for training and UKB testing.
 
 hcc_ext_val includes the relevant files for external inference/testing. Start with file 01, load a dataset, load a joblib model, and run the relevant notebook chunks, especially:
 
-
+# Set paths
 model_name = f'Validation_Objects/Pipeline_{DOI}_{row_subset}_Model_{model}_{estimator}_external_val.joblib'
 full_path = os.path.join(path, model_name)
 ext_val = load(full_path) # Load the file
 print(f"Loading file from: {full_path}")
 
 
-#Initialize pipeline
+# Initialize pipeline
 pl_ext={} #reset pipeline before creating new one
 pl_ext=Pipeline(ext_val_obj=ext_val) #Initialize pipeline object
 pl_ext.external_validation(X_val=X_val_df,y_val=y_val_df)  # Load ext_data into pipeline
